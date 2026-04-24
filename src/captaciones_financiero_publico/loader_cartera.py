@@ -1,18 +1,9 @@
 """
-ETL completo: Colocaciones / Cartera — Bancos Privados
-Flujo: Excel → stg_cartera → cartera
+ETL completo: Colocaciones / Cartera — Instituciones Financieras Públicas
+Flujo: Excel → stg_cartera_publicas → cartera_publicas
 
-Columnas extra vs depósitos:
-  tipo_colocacion    → del nombre del archivo  (banca_privada_consumo, etc.)
-  subtipo_colocacion → del nombre de la hoja   (consumo_prioritario, inmobiliario, etc.)
-
-Métricas de cartera (distintas a depósitos):
-  por_vencer | no_devenga_intereses | vencida | total_cartera
-
-Variantes de archivo/hoja:
-  2017–2020 reporte : ENTIDAD en col 0, fechas como datetime, solo por_vencer
-  2021+    reporte  : col 0 = 'N' (subtipo), ENTIDAD en col 1, fechas como string dd/mm/aaaa
-  2021+    tabular  : BASE B PRIVADA … → 4 métricas completas
+Misma lógica de parseo que captaciones_financiero_privado/loader_cartera.py.
+Solo cambian los nombres de tabla y el prefijo de tipo_colocacion (banca_publica_*).
 """
 
 import sys
@@ -31,8 +22,8 @@ from sqlalchemy import text, inspect as sa_inspect
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from utils.base_engine import get_master_engine
 
-STG_TABLE   = "stg_cartera_privadas"
-FINAL_TABLE = "cartera_privadas"
+STG_TABLE   = "stg_cartera_publicas"
+FINAL_TABLE = "cartera_publicas"
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
@@ -43,17 +34,15 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _TIPO_COLOCACION_MAP = {
-    "comercial":   "banca_privada_comercial",
-    "consumo":     "banca_privada_consumo",
-    "educativo":   "banca_privada_educativo",
-    "microcredito":"banca_privada_microcredito",
-    "microcrédito":"banca_privada_microcredito",
-    "vivienda":    "banca_privada_vivienda",
-    "productivo":  "banca_privada_productivo",
+    "comercial":    "banca_publica_comercial",
+    "consumo":      "banca_publica_consumo",
+    "educativo":    "banca_publica_educativo",
+    "microcredito": "banca_publica_microcredito",
+    "microcrédito": "banca_publica_microcredito",
+    "vivienda":     "banca_publica_vivienda",
+    "productivo":   "banca_publica_productivo",
 }
 
-# Palabras clave en nombre de hoja → subtipo normalizado
-# Evaluados en orden; el primero que encaje gana
 _SUBTIPO_RULES = [
     (("comercial", "prioritario"),  "comercial_prioritario"),
     (("comercial", "ordinario"),    "comercial_ordinario"),
@@ -74,7 +63,7 @@ def _tipo_from_filename(filename: str) -> str:
     for kw, tipo in _TIPO_COLOCACION_MAP.items():
         if kw in fn:
             return tipo
-    return "banca_privada_desconocido"
+    return "banca_publica_desconocido"
 
 
 def _subtipo_from_sheetname(sheet: str) -> str:
@@ -90,12 +79,8 @@ def _subtipo_from_sheetname(sheet: str) -> str:
 # ---------------------------------------------------------------------------
 
 def load(excel_paths: list) -> None:
-    """
-    Procesa todos los Excels de cartera y los carga en stg_cartera → cartera.
-    Acepta lista de Path (salida de bot.download_and_extract["cartera"]).
-    """
     if not excel_paths:
-        log.info("[cartera] Sin archivos para procesar.")
+        log.info("[cartera_pub] Sin archivos para procesar.")
         return
 
     engine = get_master_engine()
@@ -107,14 +92,14 @@ def load(excel_paths: list) -> None:
         path = Path(path)
         if not path.exists() or path.name.startswith("~$"):
             continue
-        log.info(f"[cartera] Procesando: {path.name}")
+        log.info(f"[cartera_pub] Procesando: {path.name}")
         try:
             rows_loaded = _process_file(path, engine)
             total_stg += rows_loaded
         except Exception as ex:
-            log.error(f"[cartera] Error en {path.name}: {ex}")
+            log.error(f"[cartera_pub] Error en {path.name}: {ex}")
 
-    log.info(f"[cartera] Total filas cargadas a staging: {total_stg}")
+    log.info(f"[cartera_pub] Total filas cargadas a staging: {total_stg}")
     _consolidate(engine)
 
 
@@ -123,12 +108,6 @@ def load(excel_paths: list) -> None:
 # ---------------------------------------------------------------------------
 
 def _process_file(path: Path, engine) -> int:
-    """
-    Un archivo puede tener varias hojas reporte y/o varias hojas tabular.
-    Cada hoja genera su propio DataFrame etiquetado con subtipo_colocacion.
-    Prioridad por hoja: si existe tabular para un subtipo, descarta el reporte
-    del mismo subtipo.
-    """
     tipo_col = _tipo_from_filename(path.name)
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
 
@@ -136,10 +115,10 @@ def _process_file(path: Path, engine) -> int:
     reporte_subtipos: dict[str, pd.DataFrame] = {}
 
     for sh in wb.sheetnames:
-        ws   = wb[sh]
-        rows = list(ws.iter_rows(values_only=True))
-        subtipo  = _subtipo_from_sheetname(sh)
-        sh_type  = _detect_sheet_type(rows)
+        ws      = wb[sh]
+        rows    = list(ws.iter_rows(values_only=True))
+        subtipo = _subtipo_from_sheetname(sh)
+        sh_type = _detect_sheet_type(rows)
         log.info(f"  Hoja '{sh}': tipo={sh_type}  subtipo={subtipo}")
 
         if sh_type == "tabular":
@@ -154,9 +133,6 @@ def _process_file(path: Path, engine) -> int:
 
     wb.close()
 
-    # Combinar: tabular tiene prioridad por subtipo.
-    # Si también existe reporte para el mismo subtipo, inyectar morosidad del reporte
-    # en las filas tabular (tabular no incluye morosidad en sus columnas).
     _MERGE_KEYS = ["fecha", "entidad", "provincia", "canton"]
     frames = []
     for subtipo, df_tab in tabular_subtipos.items():
@@ -193,19 +169,12 @@ def _process_file(path: Path, engine) -> int:
 # ---------------------------------------------------------------------------
 
 def _detect_sheet_type(rows: list) -> Optional[str]:
-    """
-    tabular       → fila con 'POR VENCER' y 'NO DEVENGA INTERESES'
-    reporte_nuevo → fila con 'N','ENTIDAD','PROVINCIA','CANTON' + fechas como string
-    reporte_viejo → fila con 'ENTIDAD' en col 0 + 'CANTON' + datetime en cols siguientes
-    """
     for row in rows[:15]:
         vals_upper = [str(v).strip().upper() for v in row if v is not None and str(v).strip()]
 
-        # Tabular (2021+)
         if "POR VENCER" in vals_upper and "NO DEVENGA INTERESES" in vals_upper:
             return "tabular"
 
-        # Reporte nuevo (2021+): col 0 o 1 tiene 'N', fechas como string dd/mm/aaaa
         if "ENTIDAD" in vals_upper and "CANTON" in vals_upper:
             has_str_dates = any(
                 isinstance(v, str) and re.match(r"\d{1,2}/\d{1,2}/\d{4}", str(v).strip())
@@ -224,14 +193,10 @@ def _detect_sheet_type(rows: list) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Parser hoja TABULAR (BASE B PRIVADA …, 2021+)
+# Parser hoja TABULAR
 # ---------------------------------------------------------------------------
 
 def _parse_tabular(rows, archivo, hoja, tipo_col, subtipo) -> Optional[pd.DataFrame]:
-    """
-    Estructura: [None, subtipo_str?, FECHA, ENTIDAD, PROVINCIA, CANTON,
-                 POR VENCER, NO DEVENGA INTERESES, VENCIDA, TOTAL CARTERA]
-    """
     header_idx = None
     for i, row in enumerate(rows[:15]):
         vals = [str(v).strip().upper() for v in row if v is not None and str(v).strip()]
@@ -247,17 +212,17 @@ def _parse_tabular(rows, archivo, hoja, tipo_col, subtipo) -> Optional[pd.DataFr
     data_rows   = rows[header_idx + 1:]
 
     col_map = {
-        "FECHA":                 "fecha",
-        "ENTIDAD":               "entidad",
-        "PROVINCIA":             "provincia",
-        "CANTON":                "canton",
-        "POR VENCER":            "por_vencer",
-        "NO DEVENGA INTERESES":  "no_devenga_intereses",
-        "VENCIDA":               "vencida",
-        "TOTAL CARTERA":         "total_cartera",
-        "TOTAL SALDO":           "total_cartera",
-        "TOTAL":                 "total_cartera",
-        "MOROSIDAD":             "morosidad",
+        "FECHA":                "fecha",
+        "ENTIDAD":              "entidad",
+        "PROVINCIA":            "provincia",
+        "CANTON":               "canton",
+        "POR VENCER":           "por_vencer",
+        "NO DEVENGA INTERESES": "no_devenga_intereses",
+        "VENCIDA":              "vencida",
+        "TOTAL CARTERA":        "total_cartera",
+        "TOTAL SALDO":          "total_cartera",
+        "TOTAL":                "total_cartera",
+        "MOROSIDAD":            "morosidad",
     }
     col_pos = {}
     for j, h in enumerate(raw_headers):
@@ -278,8 +243,6 @@ def _parse_tabular(rows, archivo, hoja, tipo_col, subtipo) -> Optional[pd.DataFr
         if all(v is None or str(v).strip() == "" for v in row):
             continue
         rec = {col: (row[pos] if pos < len(row) else None) for col, pos in col_pos.items()}
-
-        # Col 1 puede contener el subtipo explícito (ej. "INMOBILIARIO")
         if len(row) > 1 and row[1] is not None and str(row[1]).strip():
             current_subtipo = _subtipo_from_sheetname(str(row[1]).strip())
         rec["subtipo_colocacion"] = current_subtipo
@@ -299,14 +262,6 @@ def _parse_tabular(rows, archivo, hoja, tipo_col, subtipo) -> Optional[pd.DataFr
 # ---------------------------------------------------------------------------
 
 def _parse_reporte(rows, archivo, hoja, tipo_col, subtipo, sh_type) -> Optional[pd.DataFrame]:
-    """
-    reporte_viejo (2017-2020): ENTIDAD col 0, fechas datetime, solo por_vencer
-    reporte_nuevo (2021+)    : fila N-1 = grupos de métrica, fila N = N/ENTIDAD/CANTON/fechas repetidas
-    Cada grupo de métrica (CARTERA POR VENCER, NO DEVENGA INTERESES, VENCIDA, SALDO TOTAL,
-    MOROSIDAD) repite el mismo set de fechas. El parser genera una fila por fecha con las
-    5 métricas ya resueltas.
-    """
-    # 1. Localizar fila de encabezado (tiene ENTIDAD y CANTON)
     header_idx = None
     for i, row in enumerate(rows[:15]):
         vals_upper = [str(v).strip().upper() for v in row if v is not None and str(v).strip()]
@@ -318,7 +273,6 @@ def _parse_reporte(rows, archivo, hoja, tipo_col, subtipo, sh_type) -> Optional[
         log.warning(f"  [{hoja}] No se encontró encabezado de reporte.")
         return None
 
-    # 2. Detectar fila de grupos de métrica (inmediatamente anterior al encabezado)
     _METRIC_NAMES = {
         "CARTERA POR VENCER":               "por_vencer",
         "CARTERA QUE NO DEVENGA INTERESES": "no_devenga_intereses",
@@ -326,7 +280,7 @@ def _parse_reporte(rows, archivo, hoja, tipo_col, subtipo, sh_type) -> Optional[
         "SALDO TOTAL":                      "total_cartera",
         "MOROSIDAD":                        "morosidad",
     }
-    col_metric: dict[int, str] = {}   # col_idx → métrica
+    col_metric: dict[int, str] = {}
 
     if header_idx > 0:
         metric_row = rows[header_idx - 1]
@@ -341,14 +295,13 @@ def _parse_reporte(rows, archivo, hoja, tipo_col, subtipo, sh_type) -> Optional[
             if current_metric:
                 col_metric[j] = current_metric
 
-    # 3. Parsear encabezado: cols descriptivas + cols de fecha→métrica
     header_row = rows[header_idx]
     data_rows  = rows[header_idx + 1:]
 
     DESC_MAP = {"ENTIDAD": "entidad", "PROVINCIA": "provincia", "CANTON": "canton"}
     desc_cols: dict[str, int] = {}
     subtipo_col_idx: Optional[int] = None
-    date_col_list: list[tuple[int, dt_mod.date, str]] = []  # (col_idx, fecha, métrica)
+    date_col_list: list[tuple[int, dt_mod.date, str]] = []
 
     for j, cell in enumerate(header_row):
         if cell is None:
@@ -377,7 +330,6 @@ def _parse_reporte(rows, archivo, hoja, tipo_col, subtipo, sh_type) -> Optional[
         log.warning(f"  [{hoja}] No se encontraron columnas de fecha.")
         return None
 
-    # Agrupar cols por fecha → {métrica: col_idx}
     date_groups: dict[dt_mod.date, dict[str, int]] = defaultdict(dict)
     for col_idx, d, metric in date_col_list:
         date_groups[d][metric] = col_idx
@@ -387,7 +339,6 @@ def _parse_reporte(rows, archivo, hoja, tipo_col, subtipo, sh_type) -> Optional[
         all_col_idxs.append(subtipo_col_idx)
     max_col = max(all_col_idxs) + 1
 
-    # 4. Leer filas de datos → registros anchos (uno por fila fuente)
     wide_records = []
     for row in data_rows:
         if all(v is None or str(v).strip() == "" for v in row):
@@ -412,18 +363,15 @@ def _parse_reporte(rows, archivo, hoja, tipo_col, subtipo, sh_type) -> Optional[
 
     df_wide = pd.DataFrame(wide_records)
 
-    # 5. Forward-fill jerarquía visual
     for col in ["entidad", "provincia", "canton", "_subtipo_raw"]:
         if col in df_wide.columns:
             df_wide[col] = df_wide[col].ffill()
 
-    # 6. Excluir filas de totales
     total_mask = df_wide.apply(_is_total_row, axis=1)
     df_wide = df_wide[~total_mask].copy()
     if total_mask.sum():
         log.info(f"  [{hoja}] Descartadas {total_mask.sum()} filas de totales.")
 
-    # 7. Melt: una fila por fecha con todas las métricas
     ALL_METRICS = ["por_vencer", "no_devenga_intereses", "vencida", "total_cartera", "morosidad"]
     rows_long = []
     for _, row in df_wide.iterrows():
@@ -458,7 +406,6 @@ def _parse_reporte(rows, archivo, hoja, tipo_col, subtipo, sh_type) -> Optional[
 # ---------------------------------------------------------------------------
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # fecha → date
     if "fecha" in df.columns:
         def _to_date(v):
             if isinstance(v, dt_mod.datetime):
@@ -471,14 +418,12 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
                 return None
         df["fecha"] = df["fecha"].apply(_to_date)
 
-    # texto → strip + upper
     for col in ["entidad", "provincia", "canton", "tipo_colocacion", "subtipo_colocacion"]:
         if col in df.columns:
             df[col] = df[col].apply(
                 lambda v: str(v).strip().upper() if v is not None and str(v).strip() else None
             )
 
-    # numéricos
     for col in ["por_vencer", "no_devenga_intereses", "vencida", "total_cartera", "morosidad"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -564,9 +509,6 @@ def _load_staging(df: pd.DataFrame, engine) -> int:
 # ---------------------------------------------------------------------------
 
 def _consolidate(engine) -> None:
-    """
-    Prioridad: tabular > reporte para el mismo subtipo/fecha/entidad/provincia/canton.
-    """
     sql = text(f"""
         INSERT INTO {FINAL_TABLE} (
             tipo_colocacion, subtipo_colocacion,
@@ -610,7 +552,7 @@ def _consolidate(engine) -> None:
     with engine.begin() as conn:
         result = conn.execute(sql)
         inserted = result.rowcount if result.rowcount >= 0 else "?"
-    log.info(f"[cartera] [{FINAL_TABLE}] {inserted} filas consolidadas.")
+    log.info(f"[cartera_pub] [{FINAL_TABLE}] {inserted} filas consolidadas.")
 
 
 # ---------------------------------------------------------------------------
@@ -618,7 +560,6 @@ def _consolidate(engine) -> None:
 # ---------------------------------------------------------------------------
 
 def _ensure_columns(engine) -> None:
-    """Agrega columnas que faltan en tablas ya existentes (migración no destructiva)."""
     inspector = sa_inspect(engine)
     new_cols = {"morosidad": "FLOAT"}
     for table in [STG_TABLE, FINAL_TABLE]:
@@ -629,7 +570,7 @@ def _ensure_columns(engine) -> None:
             if col_name not in existing:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE {table} ADD {col_name} {col_type}"))
-                log.info(f"[cartera] Columna '{col_name}' añadida a {table}.")
+                log.info(f"[cartera_pub] Columna '{col_name}' añadida a {table}.")
 
 
 def _ensure_tables(engine) -> None:
@@ -658,7 +599,7 @@ def _ensure_tables(engine) -> None:
                     fecha_carga           DATETIME
                 )
             """))
-        log.info(f"[cartera] Tabla {STG_TABLE} creada.")
+        log.info(f"[cartera_pub] Tabla {STG_TABLE} creada.")
 
     if not inspector.has_table(FINAL_TABLE):
         with engine.begin() as conn:
@@ -689,4 +630,4 @@ def _ensure_tables(engine) -> None:
                 CREATE CLUSTERED INDEX CIX_{FINAL_TABLE}_fecha_prov_canton
                     ON {FINAL_TABLE} (fecha, provincia, canton)
             """))
-        log.info(f"[cartera] Tabla {FINAL_TABLE} creada (orden: fecha → provincia → canton).")
+        log.info(f"[cartera_pub] Tabla {FINAL_TABLE} creada (orden: fecha → provincia → canton).")

@@ -1,19 +1,14 @@
 """
-ETL completo: Captaciones / Depósitos — Bancos Privados
-Flujo: Excel → stg_captaciones → captaciones
+ETL completo: Captaciones / Depósitos — Instituciones Financieras Públicas
+Flujo: Excel → stg_captaciones_publicas → captaciones_publicas
 
-Variantes de archivo por año:
-  2017–2020 : 1 hoja reporte (BANCOS PRIVADOS)  → solo NUMERO DE CLIENTES, formato ancho
-  2021–2025 : 2 hojas → reporte (BANCA PRIVADA) + tabular (BASE BANCA PRIVADA)
-              Prioridad: tabular (tiene 3 métricas + cuenta)
-
-Detección automática de tipo de hoja por contenido, no por nombre.
+Misma lógica de parseo que captaciones_financiero_privado/loader_depositos.py.
+Solo cambian los nombres de tabla.
 """
 
 import sys
 import hashlib
 import logging
-from datetime import date as date_type
 from pathlib import Path
 from typing import Optional
 
@@ -24,13 +19,12 @@ from sqlalchemy import text, inspect as sa_inspect
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from utils.base_engine import get_master_engine
 
-STG_TABLE   = "stg_captaciones_privadas"
-FINAL_TABLE = "captaciones_privadas"
+STG_TABLE   = "stg_captaciones_publicas"
+FINAL_TABLE = "captaciones_publicas"
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-# Palabras que indican fila de total/subtotal (case-insensitive, al inicio del texto)
 _TOTAL_PREFIXES = ("total ", "total\t", "subtotal")
 
 
@@ -39,12 +33,8 @@ _TOTAL_PREFIXES = ("total ", "total\t", "subtotal")
 # ---------------------------------------------------------------------------
 
 def load(excel_paths: list) -> None:
-    """
-    Procesa todos los Excels de depósitos y los carga en stg_captaciones → captaciones.
-    Acepta lista de Path (salida de bot.download_and_extract["depositos"]).
-    """
     if not excel_paths:
-        log.info("[depositos] Sin archivos para procesar.")
+        log.info("[depositos_pub] Sin archivos para procesar.")
         return
 
     engine = get_master_engine()
@@ -55,14 +45,14 @@ def load(excel_paths: list) -> None:
         path = Path(path)
         if not path.exists() or path.name.startswith("~$"):
             continue
-        log.info(f"[depositos] Procesando: {path.name}")
+        log.info(f"[depositos_pub] Procesando: {path.name}")
         try:
             rows_loaded = _process_file(path, engine)
             total_stg += rows_loaded
         except Exception as ex:
-            log.error(f"[depositos] Error en {path.name}: {ex}")
+            log.error(f"[depositos_pub] Error en {path.name}: {ex}")
 
-    log.info(f"[depositos] Total filas cargadas a staging: {total_stg}")
+    log.info(f"[depositos_pub] Total filas cargadas a staging: {total_stg}")
     _consolidate(engine)
 
 
@@ -71,15 +61,11 @@ def load(excel_paths: list) -> None:
 # ---------------------------------------------------------------------------
 
 def _process_file(path: Path, engine) -> int:
-    """
-    Detecta las hojas del Excel, las transforma y carga a staging.
-    Retorna el número de filas nuevas insertadas en staging.
-    """
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     sheets = wb.sheetnames
 
-    tabular_df  = None
-    reporte_df  = None
+    tabular_df = None
+    reporte_df = None
 
     for sh in sheets:
         ws = wb[sh]
@@ -94,7 +80,6 @@ def _process_file(path: Path, engine) -> int:
 
     wb.close()
 
-    # Prioridad: tabular > reporte
     if tabular_df is not None and not tabular_df.empty:
         df = tabular_df
     elif reporte_df is not None and not reporte_df.empty:
@@ -113,20 +98,11 @@ def _process_file(path: Path, engine) -> int:
 # ---------------------------------------------------------------------------
 
 def _detect_sheet_type(rows: list) -> Optional[str]:
-    """
-    Analiza las primeras filas y determina 'tabular', 'reporte' o None.
-
-    Tabular:  hay una fila encabezado con 'FECHA' y 'CUENTA'.
-    Reporte:  hay una fila encabezado con 'ENTIDAD' y 'TIPO DE DEPOSITO',
-              más columnas de tipo datetime (fechas mensuales).
-    """
     for row in rows[:15]:
         vals = [str(v).strip().upper() for v in row if v is not None]
-        joined = " | ".join(vals)
         if "FECHA" in vals and "CUENTA" in vals:
             return "tabular"
         if "ENTIDAD" in vals and "TIPO DE DEPOSITO" in vals:
-            # Verificar que haya fechas en las columnas siguientes
             has_dates = any(isinstance(v, __import__("datetime").datetime) for v in row)
             if has_dates:
                 return "reporte"
@@ -134,15 +110,10 @@ def _detect_sheet_type(rows: list) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Parser hoja TABULAR (BASE BANCA PRIVADA, 2021+)
+# Parser hoja TABULAR
 # ---------------------------------------------------------------------------
 
 def _parse_tabular(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
-    """
-    Hoja tabular: encabezados en la primera fila no vacía que contenga 'FECHA'.
-    Estructura: [vacío?, FECHA, ENTIDAD, REGION, PROVINCIA, CANTON, CUENTA,
-                 TIPO DE DEPOSITO, NUMERO DE CUENTAS, NUMERO DE CLIENTES, SALDO]
-    """
     header_idx = None
     for i, row in enumerate(rows):
         vals = [str(v).strip().upper() for v in row if v is not None]
@@ -157,22 +128,20 @@ def _parse_tabular(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
     raw_headers = rows[header_idx]
     data_rows   = rows[header_idx + 1:]
 
-    # Normalizar nombres de columna
     col_map = {
-        "FECHA": "fecha",
-        "ENTIDAD": "entidad",
-        "REGION": "region",
-        "PROVINCIA": "provincia",
-        "CANTON": "canton",
-        "CUENTA": "cuenta",
-        "TIPO DE DEPOSITO": "tipo_deposito",
-        "TIPO DE DEPÓSITO": "tipo_deposito",
-        "NUMERO DE CUENTAS": "numero_cuentas",
+        "FECHA":              "fecha",
+        "ENTIDAD":            "entidad",
+        "REGION":             "region",
+        "PROVINCIA":          "provincia",
+        "CANTON":             "canton",
+        "CUENTA":             "cuenta",
+        "TIPO DE DEPOSITO":   "tipo_deposito",
+        "TIPO DE DEPÓSITO":   "tipo_deposito",
+        "NUMERO DE CUENTAS":  "numero_cuentas",
         "NUMERO DE CLIENTES": "numero_clientes",
-        "SALDO": "saldo",
+        "SALDO":              "saldo",
     }
 
-    headers = []
     col_positions = {}
     for j, h in enumerate(raw_headers):
         if h is None:
@@ -180,20 +149,17 @@ def _parse_tabular(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
         hn = str(h).strip().upper()
         if hn in col_map:
             col_positions[col_map[hn]] = j
-            headers.append((j, col_map[hn]))
 
     required = {"fecha", "entidad", "tipo_deposito"}
     if not required.issubset(col_positions.keys()):
-        log.warning(f"  [{hoja}] Faltan columnas requeridas: {required - set(col_positions.keys())}")
+        log.warning(f"  [{hoja}] Faltan columnas: {required - set(col_positions.keys())}")
         return pd.DataFrame()
 
     records = []
     for row in data_rows:
         if all(v is None for v in row):
             continue
-        rec = {}
-        for col_name, pos in col_positions.items():
-            rec[col_name] = row[pos] if pos < len(row) else None
+        rec = {col: (row[pos] if pos < len(row) else None) for col, pos in col_positions.items()}
         records.append(rec)
 
     df = pd.DataFrame(records)
@@ -201,37 +167,19 @@ def _parse_tabular(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
     df["archivo_origen"] = archivo
     df["hoja_origen"]    = hoja
     df["fecha_carga"]    = pd.Timestamp.now()
-
-    df = _normalize_columns(df)
-    return df
+    return _normalize_columns(df)
 
 
 # ---------------------------------------------------------------------------
-# Parser hoja REPORTE (BANCOS PRIVADOS / BANCA PRIVADA, todos los años)
+# Parser hoja REPORTE
 # ---------------------------------------------------------------------------
 
 def _parse_reporte(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
-    """
-    Hoja reporte: formato ancho con fechas como columnas.
-    Solo contiene NUMERO DE CLIENTES.
-
-    Detección dinámica del encabezado: busca la fila con 'ENTIDAD'.
-    Columnas descriptivas: ENTIDAD, REGION, PROVINCIA, CANTON, TIPO DE DEPOSITO.
-    Columnas métricas: las columnas datetime → se transforman a filas (melt).
-    """
-    header_idx   = None
-    metric_label = "NUMERO DE CLIENTES"
-
+    header_idx = None
     for i, row in enumerate(rows[:20]):
         vals_upper = [str(v).strip().upper() for v in row if v is not None]
         if "ENTIDAD" in vals_upper and "TIPO DE DEPOSITO" in vals_upper:
             header_idx = i
-            # Buscar la etiqueta de métrica en las filas anteriores
-            for prev_row in rows[max(0, i - 3):i]:
-                for cell in prev_row:
-                    if cell is not None and "NUMERO DE CLIENTES" in str(cell).upper():
-                        metric_label = "numero_clientes"
-                        break
             break
 
     if header_idx is None:
@@ -241,15 +189,14 @@ def _parse_reporte(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
     header_row = rows[header_idx]
     data_rows  = rows[header_idx + 1:]
 
-    # Identificar columnas descriptivas y de fechas
-    desc_cols  = {}   # nombre_estándar -> índice
-    date_cols  = []   # (índice, datetime)
+    desc_cols = {}
+    date_cols = []
 
     DESC_MAP = {
-        "ENTIDAD": "entidad",
-        "REGION": "region",
-        "PROVINCIA": "provincia",
-        "CANTON": "canton",
+        "ENTIDAD":          "entidad",
+        "REGION":           "region",
+        "PROVINCIA":        "provincia",
+        "CANTON":           "canton",
         "TIPO DE DEPOSITO": "tipo_deposito",
         "TIPO DE DEPÓSITO": "tipo_deposito",
     }
@@ -267,12 +214,11 @@ def _parse_reporte(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
         log.warning(f"  [{hoja}] No se encontraron columnas de fecha en reporte.")
         return pd.DataFrame()
 
-    # Construir DataFrame ancho
     col_names = {}
     for name, idx in desc_cols.items():
         col_names[idx] = name
     for idx, d in date_cols:
-        col_names[idx] = d  # La fecha como nombre de columna
+        col_names[idx] = d
 
     max_col = max(col_names.keys()) + 1
     records = []
@@ -285,19 +231,15 @@ def _parse_reporte(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
 
     df_wide = pd.DataFrame(records)
 
-    # Forward fill columnas descriptivas (jerarquía visual del reporte)
     for col in ["entidad", "region", "provincia", "canton"]:
         if col in df_wide.columns:
             df_wide[col] = df_wide[col].ffill()
 
-    # Excluir filas de totales
     total_mask = df_wide.apply(_is_total_row, axis=1)
-    n_totals = total_mask.sum()
-    if n_totals:
-        log.info(f"  [{hoja}] Descartadas {n_totals} filas de totales.")
+    if total_mask.sum():
+        log.info(f"  [{hoja}] Descartadas {total_mask.sum()} filas de totales.")
     df_wide = df_wide[~total_mask].copy()
 
-    # Melt: una fila por (descriptoras + fecha)
     date_col_names = [d for _, d in date_cols]
     id_vars = [c for c in ["entidad", "region", "provincia", "canton", "tipo_deposito"]
                if c in df_wide.columns]
@@ -309,7 +251,6 @@ def _parse_reporte(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
         value_name="numero_clientes",
     )
 
-    # Columnas ausentes en reporte
     df_long["numero_cuentas"] = None
     df_long["saldo"]          = None
     df_long["cuenta"]         = None
@@ -317,9 +258,7 @@ def _parse_reporte(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
     df_long["archivo_origen"] = archivo
     df_long["hoja_origen"]    = hoja
     df_long["fecha_carga"]    = pd.Timestamp.now()
-
-    df_long = _normalize_columns(df_long)
-    return df_long
+    return _normalize_columns(df_long)
 
 
 # ---------------------------------------------------------------------------
@@ -327,13 +266,11 @@ def _parse_reporte(rows: list, archivo: str, hoja: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Limpia tipos y textos en el DataFrame ya transformado a formato largo."""
     import datetime as dt_mod
 
-    # fecha → date
     if "fecha" in df.columns:
         def _to_date(v):
-            if isinstance(v, (dt_mod.datetime,)):
+            if isinstance(v, dt_mod.datetime):
                 return v.date()
             if isinstance(v, dt_mod.date):
                 return v
@@ -343,25 +280,20 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
                 return None
         df["fecha"] = df["fecha"].apply(_to_date)
 
-    # texto → strip + upper
     for col in ["entidad", "region", "provincia", "canton", "tipo_deposito", "cuenta"]:
         if col in df.columns:
             df[col] = df[col].apply(
                 lambda v: str(v).strip().upper() if v is not None and str(v).strip() else None
             )
 
-    # normalizar tipo_deposito: variantes de tildes/mayúsculas
     if "tipo_deposito" in df.columns:
         df["tipo_deposito"] = df["tipo_deposito"].apply(_normalize_tipo_deposito)
 
-    # numéricos
     for col in ["numero_cuentas", "numero_clientes", "saldo"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # hash_registro
     df["hash_registro"] = df.apply(_compute_hash, axis=1)
-
     return df
 
 
@@ -370,7 +302,6 @@ _TIPO_NORMALIZATION = {
     "DE MAS DE 361 DIAS":    "DE MÁS DE 361 DÍAS",
     "DE MAS DE 361 DÍAS":    "DE MÁS DE 361 DÍAS",
     "DE MÁS DE 361 DIAS":    "DE MÁS DE 361 DÍAS",
-    "DE MAS DE 361 DIAS":    "DE MÁS DE 361 DÍAS",
     "DEPOSITOS MONETARIOS QUE GENERAN INTERESES":      "DEPÓSITOS MONETARIOS QUE GENERAN INTERESES",
     "DEPOSITOS MONETARIOS QUE NO GENERAN INTERESES":   "DEPÓSITOS MONETARIOS QUE NO GENERAN INTERESES",
     "DEPOSITOS MONETARIOS DE INSTITUCIONES FINANCIERAS":"DEPÓSITOS MONETARIOS DE INSTITUCIONES FINANCIERAS",
@@ -381,31 +312,26 @@ _TIPO_NORMALIZATION = {
 def _normalize_tipo_deposito(v: Optional[str]) -> Optional[str]:
     if v is None:
         return None
-    norm = v.strip().upper()
-    # Quitar dobles espacios
-    norm = " ".join(norm.split())
+    norm = " ".join(v.strip().upper().split())
     return _TIPO_NORMALIZATION.get(norm, norm)
 
 
 def _is_total_row(row: pd.Series) -> bool:
-    """True si alguna celda descriptiva comienza con 'Total' (case-insensitive)."""
     for col in ["entidad", "region", "provincia", "canton", "tipo_deposito"]:
         if col in row and row[col] is not None:
-            v = str(row[col]).strip().upper()
-            if v.startswith("TOTAL"):
+            if str(row[col]).strip().upper().startswith("TOTAL"):
                 return True
     return False
 
 
 def _compute_hash(row: pd.Series) -> str:
-    """SHA-256 de la clave natural del registro."""
     parts = [
-        str(row.get("fecha", "") or ""),
-        str(row.get("entidad", "") or ""),
-        str(row.get("region", "") or ""),
-        str(row.get("provincia", "") or ""),
-        str(row.get("canton", "") or ""),
-        str(row.get("cuenta", "") or ""),
+        str(row.get("fecha",         "") or ""),
+        str(row.get("entidad",       "") or ""),
+        str(row.get("region",        "") or ""),
+        str(row.get("provincia",     "") or ""),
+        str(row.get("canton",        "") or ""),
+        str(row.get("cuenta",        "") or ""),
         str(row.get("tipo_deposito", "") or ""),
     ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
@@ -416,19 +342,12 @@ def _compute_hash(row: pd.Series) -> str:
 # ---------------------------------------------------------------------------
 
 def _validate(df: pd.DataFrame) -> pd.DataFrame:
-    """Descarta filas que no cumplan reglas mínimas de calidad."""
     initial = len(df)
-
-    mask_ok = (
-        df["fecha"].notna() &
-        df["entidad"].notna() &
-        df["tipo_deposito"].notna()
-    )
-    df = df[mask_ok].copy()
-
+    mask = df["fecha"].notna() & df["entidad"].notna() & df["tipo_deposito"].notna()
+    df = df[mask].copy()
     dropped = initial - len(df)
     if dropped:
-        log.info(f"  Descartadas por calidad (fecha/entidad/tipo nulos): {dropped}")
+        log.info(f"  Descartadas por calidad: {dropped}")
     return df
 
 
@@ -445,25 +364,16 @@ _STG_COLS = [
 ]
 
 def _load_staging(df: pd.DataFrame, engine) -> int:
-    """
-    Inserta en stg_captaciones solo los registros cuyo hash_registro
-    no existe aún en staging (idempotente).
-    """
-    # Alinear columnas
     for col in _STG_COLS:
         if col not in df.columns:
             df[col] = None
-    df = df[_STG_COLS]
+    df = df[_STG_COLS].drop_duplicates(subset=["hash_registro"])
 
-    # Deduplicar dentro del propio DataFrame
-    df = df.drop_duplicates(subset=["hash_registro"])
-
-    # Excluir hashes ya presentes en staging
     with engine.connect() as conn:
-        existing_hashes = set(
+        existing = set(
             pd.read_sql(f"SELECT hash_registro FROM {STG_TABLE}", conn)["hash_registro"].tolist()
         )
-    new_df = df[~df["hash_registro"].isin(existing_hashes)]
+    new_df = df[~df["hash_registro"].isin(existing)]
 
     if new_df.empty:
         log.info(f"  [staging] Sin registros nuevos.")
@@ -479,11 +389,6 @@ def _load_staging(df: pd.DataFrame, engine) -> int:
 # ---------------------------------------------------------------------------
 
 def _consolidate(engine) -> None:
-    """
-    Mueve registros de stg_captaciones a captaciones sin duplicar.
-    Prioridad: tabular > reporte (si hay solapamiento de clave natural).
-    Clave natural: fecha + entidad + region + provincia + canton + cuenta + tipo_deposito
-    """
     sql = text(f"""
         INSERT INTO {FINAL_TABLE} (
             fecha, entidad, region, provincia, canton,
@@ -516,19 +421,18 @@ def _consolidate(engine) -> None:
           AND NOT EXISTS (
               SELECT 1 FROM {STG_TABLE} s2
               WHERE s2.tipo_hoja = 'tabular'
-                AND s2.fecha          = s.fecha
-                AND s2.entidad        = s.entidad
-                AND COALESCE(s2.region,'')   = COALESCE(s.region,'')
-                AND COALESCE(s2.provincia,'')= COALESCE(s.provincia,'')
-                AND COALESCE(s2.canton,'')   = COALESCE(s.canton,'')
-                AND COALESCE(s2.tipo_deposito,'') = COALESCE(s.tipo_deposito,'')
+                AND s2.fecha              = s.fecha
+                AND s2.entidad            = s.entidad
+                AND COALESCE(s2.region,'')         = COALESCE(s.region,'')
+                AND COALESCE(s2.provincia,'')      = COALESCE(s.provincia,'')
+                AND COALESCE(s2.canton,'')         = COALESCE(s.canton,'')
+                AND COALESCE(s2.tipo_deposito,'')  = COALESCE(s.tipo_deposito,'')
           )
     """)
-
     with engine.begin() as conn:
         result = conn.execute(sql)
         inserted = result.rowcount if result.rowcount >= 0 else "?"
-    log.info(f"[depositos] [{FINAL_TABLE}] {inserted} filas consolidadas.")
+    log.info(f"[depositos_pub] [{FINAL_TABLE}] {inserted} filas consolidadas.")
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +464,7 @@ def _ensure_tables(engine) -> None:
                     fecha_carga      DATETIME
                 )
             """))
-        log.info(f"[depositos] Tabla {STG_TABLE} creada.")
+        log.info(f"[depositos_pub] Tabla {STG_TABLE} creada.")
 
     if not inspector.has_table(FINAL_TABLE):
         with engine.begin() as conn:
@@ -582,75 +486,12 @@ def _ensure_tables(engine) -> None:
                     tipo_hoja        NVARCHAR(20),
                     hash_registro    NVARCHAR(64),
                     fecha_carga      DATETIME,
-                    -- PK no clusterizada para liberar el índice clusterizado
                     CONSTRAINT PK_{FINAL_TABLE} PRIMARY KEY NONCLUSTERED (id),
                     CONSTRAINT UQ_{FINAL_TABLE}_hash UNIQUE NONCLUSTERED (hash_registro)
                 )
             """))
-            # Índice clusterizado en (fecha, provincia, canton) →
-            # los datos se almacenan físicamente en ese orden
             conn.execute(text(f"""
                 CREATE CLUSTERED INDEX CIX_{FINAL_TABLE}_fecha_prov_canton
                     ON {FINAL_TABLE} (fecha, provincia, canton)
             """))
-        log.info(f"[depositos] Tabla {FINAL_TABLE} creada (orden: fecha → provincia → canton).")
-        return
-
-    # Tabla ya existe: verificar que el índice clusterizado es el correcto
-    _ensure_clustered_index(engine)
-
-
-def _ensure_clustered_index(engine) -> None:
-    """
-    Si la tabla captaciones existe pero su índice clusterizado no es
-    (fecha, provincia, canton), lo recrea:
-      1. Elimina el índice clusterizado actual (puede ser el PK).
-      2. Convierte el PK a NONCLUSTERED si hace falta.
-      3. Crea el nuevo índice clusterizado en (fecha, provincia, canton).
-    """
-    check_sql = text("""
-        SELECT i.name, i.is_primary_key,
-               STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS cols
-        FROM sys.indexes i
-        JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-        JOIN sys.columns c        ON c.object_id  = i.object_id AND c.column_id = ic.column_id
-        WHERE i.object_id = OBJECT_ID(:tbl)
-          AND i.type = 1  -- 1 = CLUSTERED
-        GROUP BY i.name, i.is_primary_key
-    """)
-
-    with engine.connect() as conn:
-        row = conn.execute(check_sql, {"tbl": FINAL_TABLE}).fetchone()
-
-    if row is None:
-        # No hay índice clusterizado aún — crearlo directamente
-        with engine.begin() as conn:
-            conn.execute(text(f"""
-                CREATE CLUSTERED INDEX CIX_{FINAL_TABLE}_fecha_prov_canton
-                    ON {FINAL_TABLE} (fecha, provincia, canton)
-            """))
-        log.info(f"[depositos] Índice clusterizado creado en {FINAL_TABLE}.")
-        return
-
-    idx_name, is_pk, cols = row
-    if cols == "fecha,provincia,canton":
-        log.info(f"[depositos] Índice clusterizado ya es correcto: {cols}")
-        return
-
-    log.info(f"[depositos] Reordenando índice clusterizado de '{cols}' → 'fecha,provincia,canton'")
-    with engine.begin() as conn:
-        if is_pk:
-            # El PK es clusterizado: hay que eliminarlo y recrearlo como NONCLUSTERED
-            conn.execute(text(f"ALTER TABLE {FINAL_TABLE} DROP CONSTRAINT {idx_name}"))
-            conn.execute(text(f"""
-                ALTER TABLE {FINAL_TABLE}
-                    ADD CONSTRAINT PK_{FINAL_TABLE} PRIMARY KEY NONCLUSTERED (id)
-            """))
-        else:
-            conn.execute(text(f"DROP INDEX {idx_name} ON {FINAL_TABLE}"))
-
-        conn.execute(text(f"""
-            CREATE CLUSTERED INDEX CIX_{FINAL_TABLE}_fecha_prov_canton
-                ON {FINAL_TABLE} (fecha, provincia, canton)
-        """))
-    log.info(f"[depositos] Índice clusterizado actualizado.")
+        log.info(f"[depositos_pub] Tabla {FINAL_TABLE} creada.")

@@ -1,37 +1,30 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-DB_MASTER = {
-    "host": "localhost",
-    "port": 1433,
-    "database": "data_verso",
-    "user": "master_user",
-    "password": "1234test",
-}
+# SQL Server local — autenticación Windows (Trusted_Connection)
+# Si usas autenticación SQL Server, cambia a:
+#   mssql+pyodbc://user:password@localhost:1433/data_verso?driver=ODBC+Driver+17+for+SQL+Server
+_DRIVER   = "ODBC+Driver+17+for+SQL+Server"
+_SERVER   = "localhost"
+_DATABASE = "data_verso"
 
-DB_READ = {
-    "host": "localhost",
-    "port": 1433,
-    "database": "data_verso",
-    "user": "read_user",
-    "password": "1234test",
-}
+_CONN_MASTER = (
+    f"mssql+pyodbc://@{_SERVER}/{_DATABASE}"
+    f"?driver={_DRIVER}&Trusted_Connection=yes"
+)
+
+_CONN_READ = (
+    f"mssql+pyodbc://@{_SERVER}/{_DATABASE}"
+    f"?driver={_DRIVER}&Trusted_Connection=yes"
+)
 
 
 def get_master_engine():
-    url = (
-        f"postgresql+psycopg2://{DB_MASTER['user']}:{DB_MASTER['password']}"
-        f"@{DB_MASTER['host']}:{DB_MASTER['port']}/{DB_MASTER['database']}"
-    )
-    return create_engine(url, echo=False)
+    return create_engine(_CONN_MASTER, echo=False, fast_executemany=True)
 
 
 def get_read_engine():
-    url = (
-        f"postgresql+psycopg2://{DB_READ['user']}:{DB_READ['password']}"
-        f"@{DB_READ['host']}:{DB_READ['port']}/{DB_READ['database']}"
-    )
-    return create_engine(url, echo=False)
+    return create_engine(_CONN_READ, echo=False)
 
 
 def get_master_session():

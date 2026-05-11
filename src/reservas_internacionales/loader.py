@@ -45,6 +45,12 @@ _MES_MAP = {
     "Oct": "Octubre", "Nov": "Noviembre","Dic": "Diciembre",
 }
 
+_MES_NUM = {
+    "Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4,
+    "Mayo": 5,  "Junio": 6,  "Julio": 7, "Agosto": 8,
+    "Septiembre": 9, "Octubre": 10, "Noviembre": 11, "Diciembre": 12,
+}
+
 _DDL_ANUAL = """
 CREATE TABLE reservas_internacionales_anual (
     id             BIGINT IDENTITY(1,1) NOT NULL,
@@ -64,6 +70,7 @@ _DDL_MENSUAL = """
 CREATE TABLE reservas_internacionales_mensual (
     id             BIGINT IDENTITY(1,1) NOT NULL,
     anio           INT            NOT NULL,
+    mes_num        TINYINT        NOT NULL,
     mes            NVARCHAR(20)   NOT NULL,
     indicador      NVARCHAR(300)  NOT NULL,
     valor_millones FLOAT          NULL,
@@ -74,7 +81,7 @@ CREATE TABLE reservas_internacionales_mensual (
 
 _IDX_MENSUAL = """
 CREATE CLUSTERED INDEX CIX_reservas_internacionales_mensual
-ON reservas_internacionales_mensual (anio, mes, indicador)"""
+ON reservas_internacionales_mensual (anio, mes_num, indicador)"""
 
 # Regex para limpiar prefijos de numeracion: "1. ", "1.1 ", "B.1.a. "
 _OUTLINE_RE = re.compile(r"^(?:(?:\d+|[A-Za-z])\.)+\d*\s+")
@@ -195,8 +202,8 @@ def _parse_mensual(rows: list) -> list[dict]:
             val = _to_float(r[ci] if ci < len(r) else None)
             if val is None:
                 continue
-            rec = {"anio": year, "mes": mes, "indicador": label, "valor_millones": val}
-            rec["hash_registro"] = _hash(["anio", "mes", "indicador", "valor_millones"], rec)
+            rec = {"anio": year, "mes_num": _MES_NUM[mes], "mes": mes, "indicador": label, "valor_millones": val}
+            rec["hash_registro"] = _hash(["anio", "mes_num", "indicador", "valor_millones"], rec)
             records.append(rec)
 
     return records
@@ -262,6 +269,12 @@ def _ensure_tables(engine) -> None:
             conn.execute(text(_DDL_ANUAL))
             conn.execute(text(_IDX_ANUAL))
             print(f"[ri] Tabla {_TABLE_ANUAL} creada.")
+        if insp.has_table(_TABLE_MENSUAL):
+            cols = {c["name"] for c in insp.get_columns(_TABLE_MENSUAL)}
+            if "mes_num" not in cols:
+                conn.execute(text(f"DROP TABLE {_TABLE_MENSUAL}"))
+                print(f"[ri] Tabla {_TABLE_MENSUAL} eliminada (esquema desactualizado).")
+                insp = sa_inspect(engine)
         if not insp.has_table(_TABLE_MENSUAL):
             conn.execute(text(_DDL_MENSUAL))
             conn.execute(text(_IDX_MENSUAL))

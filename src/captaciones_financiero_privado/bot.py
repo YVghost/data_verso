@@ -42,13 +42,9 @@ Fase 2: parse()                 → lee Excels y retorna DataFrames (pendiente).
 import sys
 import re
 import zipfile
-import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from utils.normalizer import clean_dataframe, normalize_numeric
 
 BASE_URL = "https://www.superbancos.gob.ec/estadisticas/portalestudios/capcol-bancos/"
 DOWNLOAD_DIR = Path(__file__).resolve().parents[2] / "downloads" / "captaciones_financiero_privado"
@@ -385,31 +381,3 @@ def _extract_excels(zip_path: Path, dest_dir: Path) -> list:
     return extracted
 
 
-# ---------------------------------------------------------------------------
-# Fase 2 — parseo y normalización (pendiente de revisión de Excels)
-# ---------------------------------------------------------------------------
-
-def parse(paths: dict) -> tuple:
-    """
-    Lee los Excels extraídos y retorna (df_depositos, df_cartera).
-    PENDIENTE: implementar tras revisar la estructura real de los archivos.
-
-    Notas conocidas:
-      - depositos: 1 Excel por año, 1 hoja de trabajo
-      - cartera:   hasta 5 Excels por año (uno por tipo de cartera), 2 hojas cada uno
-    """
-    df_depositos = _parse_depositos(paths.get("depositos", []))
-    df_cartera   = _parse_cartera(paths.get("cartera", []))
-    return df_depositos, df_cartera
-
-
-def _parse_depositos(excel_paths: list) -> pd.DataFrame:
-    # TODO: implementar tras revisar estructura real (Fase 1).
-    raise NotImplementedError("Implementar tras revisar Excels de depósitos.")
-
-
-def _parse_cartera(excel_paths: list) -> pd.DataFrame:
-    # TODO: implementar tras revisar estructura real (Fase 1).
-    # NOTA: cada Excel tiene 2 hojas → unir con pd.concat antes de normalizar.
-    # NOTA: hay hasta 5 Excels por año → un registro por tipo de cartera.
-    raise NotImplementedError("Implementar tras revisar Excels de cartera.")

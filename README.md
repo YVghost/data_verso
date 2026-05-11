@@ -55,21 +55,23 @@ data_verso/
 │   └── normalizer.py           # Funciones de limpieza de texto y números
 │
 ├── src/
-│   ├── captaciones_financiero_privado/   ← implementado ✓
-│   ├── captaciones_financiero_publico/   ← implementado ✓
-│   ├── depositos_gobierno_bce/           ← implementado ✓
-│   ├── empleo/                           ← implementado ✓
-│   ├── inflacion_ecuador/                ← implementado ✓
-│   ├── reservas_internacionales/         ← implementado ✓
-│   ├── riesgo_pais/                      ← implementado ✓
-│   ├── tipo_de_cambio/                   ← implementado ✓
-│   ├── ventas_actividad_economica_sri/   ← implementado ✓
-│   ├── recaudacion_mensual/              ← implementado ✓
-│   ├── recaudacion_provincial/           ← implementado ✓
-│   ├── pib_nominal/                      ← implementado ✓
-│   ├── pib_nominal_industria/            ← implementado ✓
-│   ├── pib_per_capita_nominal/           ← implementado ✓
-│   └── pib_industria/                    ← implementado ✓
+│   ├── captaciones_financiero_publico/   ✓ implementado
+│   ├── depositos_gobierno_bce/           ✓ implementado
+│   ├── empleo/                           ✓ implementado
+│   ├── inflacion_ecuador/                ✓ implementado
+│   ├── reservas_internacionales/         ✓ implementado
+│   ├── riesgo_pais/                      ✓ implementado
+│   │
+│   ├── captaciones_financiero_privado/   ⚠ parcial (loader listo, bot pendiente)
+│   │
+│   ├── pib_nominal/                      ✗ pendiente
+│   ├── pib_nominal_industria/            ✗ pendiente
+│   ├── pib_per_capita_nominal/           ✗ pendiente
+│   ├── pib_industria/                    ✗ pendiente
+│   ├── recaudacion_mensual/              ✗ pendiente
+│   ├── recaudacion_provincial/           ✗ pendiente
+│   ├── tipo_de_cambio/                   ✗ pendiente
+│   └── ventas_actividad_economica_sri/   ✗ pendiente
 │
 ├── downloads/                  # Archivos descargados (ignorados por git)
 ├── requirements.txt
@@ -78,13 +80,13 @@ data_verso/
 
 Cada fuente sigue el mismo patrón de tres archivos:
 
-- **`bot.py`** — Solo descarga: navega el portal, descarga archivos en `downloads/`.
+- **`bot.py`** — Solo descarga: navega el portal o consume la API, descarga archivos en `downloads/`.
 - **`loader.py`** — Solo ETL: lee los archivos descargados, transforma y carga en SQL Server.
 - **`main.py`** — Punto de entrada con CLI: orquesta bot + loader con argumentos de línea de comandos.
 
 ```bash
 # Patrón común de ejecución
-python main.py                  # flujo completo
+python main.py                  # flujo completo (descarga + carga)
 python main.py --download-only  # solo descarga
 python main.py --etl-only       # solo ETL (archivos ya en disco)
 ```
@@ -93,35 +95,11 @@ python main.py --etl-only       # solo ETL (archivos ya en disco)
 
 ## Fuentes implementadas
 
-### `captaciones_financiero_privado`
-
-**URL:** https://www.superbancos.gob.ec/estadisticas/portalestudios/capcol-bancos/  
-**Fuente:** Superintendencia de Bancos  
-**Periodicidad:** Mensual, desde 2014  
-**Datos:** Captaciones (depósitos) y cartera de crédito de bancos privados, por provincia y cantón.
-
-```bash
-cd src/captaciones_financiero_privado
-python main.py                         # flujo completo
-python main.py --start 2021 --end 2024 # rango de años
-python main.py --mode depositos        # solo depósitos
-python main.py --mode cartera          # solo cartera
-```
-
-**Tablas:**
-
-| Tabla | Descripción |
-|---|---|
-| `captaciones` | Depósitos bancarios por entidad, provincia y cantón |
-| `cartera` | Cartera de crédito por segmento, provincia y cantón |
-
----
-
 ### `captaciones_financiero_publico`
 
-**URL:** https://www.superbancos.gob.ec/estadisticas/portalestudios/capcol-instituciones-publicas/  
-**Fuente:** Superintendencia de Bancos  
-**Periodicidad:** Mensual  
+**URL:** https://www.superbancos.gob.ec/estadisticas/portalestudios/capcol-instituciones-publicas/
+**Fuente:** Superintendencia de Bancos
+**Periodicidad:** Mensual
 **Datos:** Captaciones y cartera de instituciones financieras públicas (BanEcuador, CFN, BEV, etc.).
 
 ```bash
@@ -134,17 +112,17 @@ python main.py --mode depositos --start 2022
 
 | Tabla | Descripción |
 |---|---|
-| `captaciones_publico` | Depósitos de entidades financieras públicas |
+| `captaciones_publico` | Depósitos de entidades financieras públicas por provincia y cantón |
 | `cartera_publico` | Cartera de crédito de entidades financieras públicas |
 
 ---
 
 ### `depositos_gobierno_bce`
 
-**URL:** https://contenido.bce.fin.ec/documentos/informacioneconomica/MonetarioFinanciero/ix_ReportesMonetarios.html  
-**Fuente:** Banco Central del Ecuador  
-**Periodicidad:** Semanal (última semana de cada año, desde 2012)  
-**Datos:** Balance Sectorial del BCE — depósitos del Gobierno Central, extraídos de la hoja IMS4/IMS5.
+**URL:** https://contenido.bce.fin.ec/documentos/informacioneconomica/MonetarioFinanciero/ix_ReportesMonetarios.html
+**Fuente:** Banco Central del Ecuador
+**Periodicidad:** Semanal (última semana de cada año, desde 2012)
+**Datos:** Información Monetaria Semanal (IMS) — todas las hojas del reporte BCE.
 
 ```bash
 cd src/depositos_gobierno_bce
@@ -153,31 +131,33 @@ python main.py --download-only
 python main.py --etl-only
 ```
 
-**Tabla:** `depositos_gobierno_bce`
+**Tablas:**
 
-| Columna | Tipo | Descripción |
-|---|---|---|
-| fecha_semana | DATE | Fecha de la semana (última del año) |
-| anio | INT | Año |
-| dep_transferibles_tot | FLOAT | Depósitos transferibles sector público incluídos en dinero amplio (MM USD) |
-| gc_dep_transferibles | FLOAT | Depósitos transferibles Gobierno Central excluídos (MM USD) |
-| otros_dep_tot | FLOAT | Total otros depósitos excluídos (MM USD) |
-| gc_otros_dep | FLOAT | Otros depósitos del Gobierno Central (MM USD) |
-| hash_registro | NVARCHAR(64) | SHA-256 para deduplicación |
+| Tabla | Hoja fuente | Formato | Descripción |
+|---|---|---|---|
+| `depositos_gobierno_ims1` | IMS1 | Ancho | Oferta monetaria — una fila por (año, mes) con 24 indicadores: RILD, emisión monetaria, cuasidinero, tasas, inflación |
+| `depositos_gobierno_ims1_1` | IMS1.1 | Ancho | Oferta monetaria M1 y liquidez total M2 — una fila por (año, mes) con 15 indicadores |
+| `depositos_gobierno_ims2` | IMS2 | Largo | Activos/pasivos por sector — una fila por (fecha_semana, indicador) |
+| `depositos_gobierno_ims2_2` | IMS2 (2) | Largo | Segunda parte IMS2 |
+| `depositos_gobierno_ims3` | IMS3 | Largo | Balance del Banco Central |
+| `depositos_gobierno_ims4` | IMS4 | Largo | Balance sectorial BCE — incluye depósitos del Gobierno Central |
+| `depositos_gobierno_ims5` | IMS5 | Largo | Otras sociedades de depósito |
+| `depositos_gobierno_ims6` | IMS6 | Largo | Sector externo |
+| `depositos_gobierno_ims7` | IMS7 | Largo | Tasas de interés |
 
 **Notas:**
-- Los archivos `.xls` de 2012-2013 usan la hoja `IMS5`; desde 2014 usan `IMS4` (mismo esquema de datos).
-- La detección de hoja es automática por contenido ("BALANCE SECTORIAL: BANCO CENTRAL").
-- Las filas se localizan por etiqueta de texto, no por número fijo, para tolerar cambios de formato año a año.
+- Tablas IMS1 e IMS1.1 tienen formato ancho (columnas fijas por indicador); el resto son formato largo (`indicador`, `valor_millones`).
+- Los labels se limpian automáticamente: se eliminan prefijos de numeración (`1.2 `, `A.`, etc.) y marcadores de nota al pie.
+- La detección de columnas en IMS1 es por keyword, tolerando cambios de esquema entre años (ej. Dinero Electrónico añadido en ~2015).
 
 ---
 
 ### `empleo`
 
-**URL (trimestral):** https://www.ecuadorencifras.gob.ec/enemdu-trimestral/  
-**URL (mensual):** https://www.ecuadorencifras.gob.ec/estadisticas-laborales-enemdu/  
-**Fuente:** INEC — ENEMDU  
-**Periodicidad:** Trimestral (desde 2020) y Mensual (histórico desde 2007)  
+**URL (trimestral):** https://www.ecuadorencifras.gob.ec/enemdu-trimestral/
+**URL (mensual):** https://www.ecuadorencifras.gob.ec/estadisticas-laborales-enemdu/
+**Fuente:** INEC — ENEMDU
+**Periodicidad:** Trimestral (desde 2020) y Mensual (histórico desde 2007)
 **Datos:** Mercado laboral — poblaciones, tasas, caracterización del empleo y sectorización.
 
 ```bash
@@ -202,9 +182,9 @@ Columna `tipo_periodo`: `'trimestral'` | `'mensual'`
 
 ### `inflacion_ecuador`
 
-**URL:** https://www.ecuadorencifras.gob.ec/inflacion/  
-**Fuente:** INEC — Índice de Precios al Consumidor (IPC)  
-**Periodicidad:** Mensual (serie histórica desde 1969)  
+**URL:** https://www.ecuadorencifras.gob.ec/inflacion/
+**Fuente:** INEC — Índice de Precios al Consumidor (IPC)
+**Periodicidad:** Mensual (serie histórica desde 1969)
 **Datos:** Variaciones mensuales/anuales del IPC, indicadores descriptivos, incidencias y variaciones por región y ciudad.
 
 ```bash
@@ -229,25 +209,83 @@ El bot descarga el ZIP del mes más reciente disponible (sondeo HEAD desde el me
 | `inflacion_ecuador_series_ipc_mensual` | `ipc_var_men_nac_reg_ciud[_emp]_*.xlsx` | Variación mensual por región/ciudad y CCIF (normal + empalmada) |
 | `inflacion_ecuador_series_ipc_anual` | `ipc_var_anu_nac_reg_ciud[_emp]_*.xlsx` | Variación anual por región/ciudad y CCIF (normal + empalmada) |
 
-Columna `es_empalmada`: `'Si'` | `'No'`  
+Columna `es_empalmada`: `'Si'` | `'No'`
 Se excluyen hojas: Esmeraldas, Machala, Sto. Domingo.
 
 ---
 
-### Otras fuentes
+### `reservas_internacionales`
 
-| Módulo | Fuente | Periodicidad | Tabla(s) |
+**URL:** https://contenido.bce.fin.ec/documentos/informacioneconomica/MonetarioFinanciero/ix_ReservasInternacionales.html
+**Fuente:** Banco Central del Ecuador
+**Periodicidad:** Mensual (desde 2000) y Anual (desde 2000)
+**Datos:** Reservas internacionales del Ecuador — posición neta en divisas, oro, DEG, posición FMI, ALADI, SUCRE y total RI.
+
+```bash
+cd src/reservas_internacionales
+python main.py                  # descarga Excel + carga ambas tablas
+python main.py --download-only
+python main.py --etl-only       # usa Excel ya descargado
+```
+
+**Tablas:**
+
+| Tabla | Descripción |
+|---|---|
+| `reservas_internacionales_anual` | Una fila por (anio, indicador) — 10 indicadores × 26 años (2000-2025) |
+| `reservas_internacionales_mensual` | Una fila por (anio, mes_num, mes, indicador) — 10 indicadores × ~316 meses (ene 2000 – abr 2026) |
+
+**Indicadores (ambas tablas):**
+`Posición neta en divisas`, `Caja en divisas`, `Depósitos netos en bancos del exterior`, `Inversiones depósitos plazo y títulos`, `Oro`, `DEG`, `Posición de reserva en FMI`, `Posición con ALADI`, `Posición SUCRE`, `RI (total)`
+
+**Notas:**
+- La tabla mensual incluye `mes_num` (1-12) e índice clustered en `(anio, mes_num, indicador)` para ordenamiento calendario natural.
+- Registros con valor `NULL` en el Excel se omiten (ej. SUCRE antes de su creación).
+
+---
+
+### `riesgo_pais`
+
+**URL:** https://contenido.bce.fin.ec/documentos/informacioneconomica/SectorExterno/ix_SectorExternoPrin.html
+**Fuente:** Banco Central del Ecuador (JSON estático, actualizado diariamente)
+**Periodicidad:** Diario (desde 2017-01-01)
+**Datos:** Índice EMBI — Riesgo País de Ecuador en puntos básicos.
+
+```bash
+cd src/riesgo_pais
+python main.py             # fetch API + carga BD
+python main.py --dry-run   # descarga y muestra sin cargar a BD
+```
+
+**No requiere Playwright** — el BCE expone los datos en un endpoint JSON directo:
+`https://contenido.bce.fin.ec/documentos/informacioneconomica/indicadores/general/datos_formulario.json`
+
+**Tabla `riesgo_pais`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `fecha` | DATE | Fecha del dato (índice clustered) |
+| `valor_riesgo_pais` | FLOAT | EMBI en puntos básicos |
+| `fecha_actualizacion` | DATE | Fecha de última actualización en BCE |
+| `hash_registro` | NVARCHAR(64) | SHA-256 para deduplicación |
+
+---
+
+## Pendiente de implementar
+
+Los siguientes módulos tienen estructura de carpeta y archivos vacíos (stubs), pero aún no tienen bot ni loader funcionales:
+
+| Módulo | Fuente | Periodicidad | Descripción |
 |---|---|---|---|
-| `reservas_internacionales` | BCE | Mensual | `reservas_internacionales` |
-| `riesgo_pais` | BCE | Diario | `riesgo_pais` |
-| `tipo_de_cambio` | BCE | Diario | `tipo_de_cambio` |
-| `ventas_actividad_economica_sri` | SRI | Mensual | `ventas_actividad_economica_sri` |
-| `recaudacion_mensual` | SRI | Mensual | `recaudacion_mensual` |
-| `recaudacion_provincial` | SRI | Mensual | `recaudacion_provincial` |
-| `pib_nominal` | BCE | Trimestral | `pib_nominal` |
-| `pib_nominal_industria` | BCE | Trimestral | `pib_nominal_industria` |
-| `pib_per_capita_nominal` | BCE | Anual | `pib_per_capita_nominal` |
-| `pib_industria` | BCE | Trimestral | `pib_industria` |
+| `captaciones_financiero_privado` | Superbancos | Mensual | Loader listo; falta bot de descarga |
+| `pib_nominal` | BCE | Trimestral | PIB nominal total |
+| `pib_nominal_industria` | BCE | Trimestral | PIB nominal por industria |
+| `pib_per_capita_nominal` | BCE | Anual | PIB per cápita nominal |
+| `pib_industria` | BCE | Trimestral | PIB por industria (variación) |
+| `recaudacion_mensual` | SRI | Mensual | Recaudación tributaria mensual |
+| `recaudacion_provincial` | SRI | Mensual | Recaudación tributaria por provincia |
+| `tipo_de_cambio` | BCE | Diario | Tipo de cambio referencial |
+| `ventas_actividad_economica_sri` | SRI | Mensual | Ventas por actividad económica |
 
 ---
 
@@ -260,7 +298,7 @@ xlrd            lectura de archivos .xls (formato Excel 97-2003)
 sqlalchemy      ORM y engine para SQL Server
 pyodbc          driver ODBC para SQL Server
 playwright      automatización del browser (portales con JS)
-requests        descarga directa de archivos (HEAD probing + GET)
+requests        descarga directa de archivos y APIs JSON
 ```
 
 ---
@@ -268,6 +306,7 @@ requests        descarga directa de archivos (HEAD probing + GET)
 ## Convenciones de implementación
 
 - **Deduplicación:** cada fila tiene un hash SHA-256. La carga es idempotente — re-ejecutar no duplica datos.
-- **PK no clusterizada + índice clustered:** `BIGINT IDENTITY` como PK física nonclustered; el índice clustered se crea por las columnas de consulta más frecuentes (fecha, región, etc.).
-- **Skip inteligente:** el bot verifica si el archivo ya está en disco antes de descargar; el loader verifica hashes antes de insertar.
-- **Tolerancia a cambios de formato:** los parsers buscan datos por etiqueta de texto o patrón de cabecera, no por número de fila fijo, para tolerar reestructuraciones anuales del BCE/INEC.
+- **PK no clusterizada + índice clustered:** `BIGINT IDENTITY` como PK física nonclustered; el índice clustered se define por las columnas de consulta más frecuentes (fecha, año, indicador, etc.).
+- **Skip inteligente:** el bot verifica si el archivo ya está en disco (o si el tamaño remoto coincide) antes de descargar; el loader verifica hashes antes de insertar.
+- **Tolerancia a cambios de formato:** los parsers localizan datos por etiqueta de texto o keyword en cabeceras, no por número de fila fijo, para tolerar reestructuraciones anuales de BCE/INEC.
+- **Encoding:** los JSON y Excel del BCE se decodifican forzando UTF-8 para manejar correctamente caracteres como `ñ`, `á`, `é`, etc.

@@ -1,11 +1,20 @@
 """
-Fuente  : BCE - Riesgo País (EMBI)
-URL     : https://contenido.bce.fin.ec/documentos/informacioneconomica/SectorExterno/ix_SectorExternoPrin.html#
-Periodicidad: Diario/semanal (histórico desde 2004)
-Instrucción : Parte inferior > Riesgo País > tres puntos izquierdos > Serie Histórica >
-              nueva pestaña > tres líneas superiores izquierdas > Descargar Excel "riesgo-pas".
+Fuente      : BCE - Riesgo Pais (EMBI)
+URL         : https://contenido.bce.fin.ec/documentos/informacioneconomica/
+              SectorExterno/ix_SectorExternoPrin.html#
+Periodicidad: Diario (desde 2017-01-01)
+Tabla       : riesgo_pais
+
+Modos de ejecucion
+------------------
+Flujo completo (fetch API + carga BD):
+    python main.py
+
+Solo consulta (muestra datos sin cargar BD):
+    python main.py --dry-run
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -16,26 +25,26 @@ import bot
 import loader
 
 
-def extract_fixed_range(start_date: str, end_date: str):
-    """Extrae riesgo país entre start_date y end_date (YYYY-MM-DD)."""
-    df = bot.download(start=start_date, end=end_date)
-    loader.load(df)
-    return df
+def run(dry_run: bool = False) -> None:
+    records = bot.fetch()
 
+    if dry_run:
+        print(f"[rp] Dry-run: {len(records)} registros obtenidos, sin cargar a BD.")
+        if records:
+            print(f"  Primero : {records[0]}")
+            print(f"  Ultimo  : {records[-1]}")
+        return
 
-def extract_to_current():
-    """Extrae riesgo país desde 2004 hasta hoy."""
-    df = bot.download()
-    loader.load(df)
-    return df
-
-
-def extract_to_specific_date(target_date: str):
-    """Extrae riesgo país hasta una fecha específica (YYYY-MM-DD)."""
-    df = bot.download(end=target_date)
-    loader.load(df)
-    return df
+    loader.load(records)
 
 
 if __name__ == "__main__":
-    extract_to_current()
+    parser = argparse.ArgumentParser(
+        description="ETL — Riesgo Pais EMBI (BCE Ecuador)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Descarga y muestra datos sin insertar en la BD"
+    )
+    args = parser.parse_args()
+    run(dry_run=args.dry_run)

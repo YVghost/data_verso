@@ -1,39 +1,93 @@
-import sys
-import pandas as pd
-from datetime import datetime
-from pathlib import Path
+"""
+Bot de descarga: Riesgo Pais (EMBI) — BCE Ecuador
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from utils.normalizer import clean_dataframe, normalize_numeric, normalize_date_column
+Fuente: JSON estatico del BCE, actualizado diariamente.
+URL   : https://contenido.bce.fin.ec/documentos/informacioneconomica/
+        indicadores/general/datos_formulario.json
 
-DOWNLOAD_DIR = Path(__file__).resolve().parents[2] / "downloads" / "riesgo_pais"
-DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+Estrategia:
+  - Descarga directa con requests (no requiere Playwright).
+  - Filtra el indicador Riesgo Pais (campo Indicador contiene "Riesgo").
+  - Retorna solo registros desde START_DATE hasta hoy.
 
-HIST_START = datetime(2004, 1, 1)
+Tabla destino: riesgo_pais
+"""
 
+import json
+from datetime import date
+from typing import Any
 
-def download(start: str = None, end: str = None) -> pd.DataFrame:
-    """Descarga, normaliza y filtra el riesgo país (EMBI) histórico."""
-    raw = _scrape()
-    df = _normalize(raw)
-    return _filter(df, start, end)
+import requests
 
-
-def _scrape() -> pd.DataFrame:
-    # TODO: navegar a BCE > SectorExterno > sección inferior Riesgo País,
-    #       tres puntos izquierdos > Serie Histórica > nueva pestaña,
-    #       tres líneas superiores > Descargar Excel "riesgo-pas".
-    raise NotImplementedError("Implementar scraping con Playwright")
-
-
-def _normalize(df: pd.DataFrame) -> pd.DataFrame:
-    df = clean_dataframe(df)
-    df["fecha"] = normalize_date_column(df["fecha"])
-    df["embi_puntos"] = normalize_numeric(df["embi_puntos"])
-    return df
+JSON_URL   = (
+    "https://contenido.bce.fin.ec/documentos/informacioneconomica"
+    "/indicadores/general/datos_formulario.json"
+)
+_JSON_KEY  = "view_ind_formulario"
+START_DATE = "2017-01-01"
+TIMEOUT    = 30  # segundos
 
 
-def _filter(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    start_dt = datetime.strptime(start, "%Y-%m-%d") if start else HIST_START
-    end_dt = datetime.strptime(end, "%Y-%m-%d") if end else datetime.today()
-    return df[(df["fecha"] >= start_dt) & (df["fecha"] <= end_dt)].reset_index(drop=True)
+# ---------------------------------------------------------------------------
+# Punto de entrada
+# ---------------------------------------------------------------------------
+
+def fetch() -> list[dict]:
+    """
+    Descarga el JSON del BCE y retorna registros de Riesgo Pais
+    desde START_DATE hasta hoy como lista de dicts:
+      [{"fecha": date, "valor_riesgo_pais": float, "fecha_actualizacion": date}, ...]
+    """
+    print("[rp] Descargando datos BCE...")
+    raw = _get_json()
+    rows = raw.get(_JSON_KEY, [])
+    print(f"[rp] Total registros en JSON: {len(rows)}")
+
+    records = []
+    today   = date.today().isoformat()
+    for row in rows:
+        if not _is_riesgo_pais(row):
+            continue
+        fecha = row.get("Fecha", "")
+        if not fecha or fecha < START_DATE or fecha > today:
+            continue
+        valor = _to_float(row.get("Valor"))
+        if valor is None:
+            continue
+        fecha_act = row.get("Carga", "")
+        records.append({
+            "fecha":              fecha,
+            "valor_riesgo_pais":  valor,
+            "fecha_actualizacion": fecha_act or None,
+        })
+
+    records.sort(key=lambda r: r["fecha"])
+    print(f"[rp] Registros Riesgo Pais desde {START_DATE}: {len(records)}")
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_json() -> dict[str, Any]:
+    resp = requests.get(JSON_URL, timeout=TIMEOUT)
+    resp.raise_for_status()
+    # Forzar UTF-8 para que la tilde de 'País' se decodifique bien
+    return json.loads(resp.content.decode("utf-8"))
+
+
+def _is_riesgo_pais(row: dict) -> bool:
+    indicador = row.get("Indicador", "")
+    medida    = row.get("Medida", "")
+    # Evita depender de 'ñ' para el filtro
+    return "Riesgo" in indicador and "Puntos" in medida
+
+
+def _to_float(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(str(v).strip())
+    except (ValueError, TypeError):
+        return None

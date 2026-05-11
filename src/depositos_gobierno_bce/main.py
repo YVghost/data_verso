@@ -1,13 +1,26 @@
 """
-Fuente  : BCE - Depósitos Gobierno Central en BCE
-URL     : https://contenido.bce.fin.ec/documentos/informacioneconomica/MonetarioFinanciero/ix_ReportesMonetarios.html
-Periodicidad: Semanal por año
-Instrucción : Estadísticas y Reportes > Reporte Monetario Semanal > elegir año > elegir semana >
-              descargar "InfMonetariaSemanal_DDMMYYYY.xls", hoja "IMS5".
-              Filas clave: 63 (Dep. transferibles GC), 74 (Gobierno Central),
-              79-80 (Otros depósitos GC).
+Fuente      : BCE - Información Monetaria Semanal
+URL         : https://contenido.bce.fin.ec/documentos/informacioneconomica/
+              MonetarioFinanciero/ix_ReportesMonetarios.html
+Periodicidad: Semanal (2012 → presente)
+Datos       : Hoja IMS5 — depósitos del Gobierno Central en el BCE
+              Fila 63: Depósitos transferibles GC
+              Fila 74: Gobierno Central
+              Filas 79-80: Otros depósitos GC
+
+Modos de ejecución
+------------------
+Flujo completo (descarga + ETL):
+    python main.py
+
+Solo descarga (sin ETL):
+    python main.py --download-only
+
+Solo ETL desde archivos ya descargados:
+    python main.py --etl-only
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -17,27 +30,48 @@ sys.path.append(str(Path(__file__).resolve().parents[2]))
 import bot
 import loader
 
-
-def extract_fixed_range(start_year: int, end_year: int):
-    """Extrae depósitos del gobierno central entre start_year y end_year."""
-    df = bot.download(start_year=start_year, end_year=end_year)
-    loader.load(df)
-    return df
+DOWNLOAD_BASE = Path(__file__).resolve().parents[2] / "downloads" / "depositos_gobierno_bce"
 
 
-def extract_to_current():
-    """Extrae depósitos del gobierno central desde 2012 hasta hoy."""
-    df = bot.download()
-    loader.load(df)
-    return df
+def _resolve_files() -> list:
+    """Encuentra todos los .xls/.xlsx ya descargados."""
+    files = sorted(DOWNLOAD_BASE.glob("**/*.xls*"))
+    return [f for f in files if not f.name.startswith("~")]
 
 
-def extract_to_specific_date(target_year: int):
-    """Extrae depósitos del gobierno central desde 2012 hasta target_year."""
-    df = bot.download(end_year=target_year)
-    loader.load(df)
-    return df
+def run(download_only: bool = False, etl_only: bool = False) -> None:
+    if etl_only:
+        paths = _resolve_files()
+        print(f"[bce] {len(paths)} archivos encontrados para ETL")
+        loader.load(paths)
+        return
+
+    result = bot.download_and_extract()
+    paths = result["files"]
+
+    if download_only:
+        print(f"Descarga completada — {len(paths)} archivos disponibles")
+        return
+
+    loader.load(paths)
 
 
 if __name__ == "__main__":
-    extract_to_current()
+    parser = argparse.ArgumentParser(
+        description="ETL — Depósitos Gobierno Central en BCE (Semanal)"
+    )
+    parser.add_argument(
+        "--download-only", action="store_true",
+        help="Solo descarga los XLS, sin cargar a la BD"
+    )
+    parser.add_argument(
+        "--etl-only", action="store_true",
+        help="Solo ejecuta el ETL sobre archivos ya descargados (sin bot)"
+    )
+
+    args = parser.parse_args()
+
+    if args.download_only and args.etl_only:
+        parser.error("--download-only y --etl-only son mutuamente excluyentes.")
+
+    run(download_only=args.download_only, etl_only=args.etl_only)

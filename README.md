@@ -56,149 +56,218 @@ data_verso/
 │
 ├── src/
 │   ├── captaciones_financiero_privado/   ← implementado ✓
-│   │   ├── bot.py              # Playwright: descarga ZIPs de Superbancos
-│   │   ├── loader_depositos.py # ETL depósitos → stg_captaciones → captaciones
-│   │   ├── loader_cartera.py   # ETL cartera   → stg_cartera     → cartera
-│   │   └── main.py             # Punto de entrada con CLI
-│   │
-│   ├── captaciones_financiero_publico/   ← en desarrollo
-│   ├── depositos_gobierno_bce/
-│   ├── empleo/
-│   ├── inflacion_ecuador/
-│   ├── pib_industria/
-│   ├── pib_nominal/
-│   ├── pib_nominal_industria/
-│   ├── pib_per_capita_nominal/
-│   ├── recaudacion_mensual/
-│   ├── recaudacion_provincial/
-│   ├── reservas_internacionales/
-│   ├── riesgo_pais/
-│   ├── tipo_de_cambio/
-│   └── ventas_actividad_economica_sri/
+│   ├── captaciones_financiero_publico/   ← implementado ✓
+│   ├── depositos_gobierno_bce/           ← implementado ✓
+│   ├── empleo/                           ← implementado ✓
+│   ├── inflacion_ecuador/                ← implementado ✓
+│   ├── reservas_internacionales/         ← implementado ✓
+│   ├── riesgo_pais/                      ← implementado ✓
+│   ├── tipo_de_cambio/                   ← implementado ✓
+│   ├── ventas_actividad_economica_sri/   ← implementado ✓
+│   ├── recaudacion_mensual/              ← implementado ✓
+│   ├── recaudacion_provincial/           ← implementado ✓
+│   ├── pib_nominal/                      ← implementado ✓
+│   ├── pib_nominal_industria/            ← implementado ✓
+│   ├── pib_per_capita_nominal/           ← implementado ✓
+│   └── pib_industria/                    ← implementado ✓
 │
 ├── downloads/                  # Archivos descargados (ignorados por git)
 ├── requirements.txt
 └── README.md
 ```
 
+Cada fuente sigue el mismo patrón de tres archivos:
+
+- **`bot.py`** — Solo descarga: navega el portal, descarga archivos en `downloads/`.
+- **`loader.py`** — Solo ETL: lee los archivos descargados, transforma y carga en SQL Server.
+- **`main.py`** — Punto de entrada con CLI: orquesta bot + loader con argumentos de línea de comandos.
+
+```bash
+# Patrón común de ejecución
+python main.py                  # flujo completo
+python main.py --download-only  # solo descarga
+python main.py --etl-only       # solo ETL (archivos ya en disco)
+```
+
 ---
 
-## Fuente: `captaciones_financiero_privado`
+## Fuentes implementadas
+
+### `captaciones_financiero_privado`
 
 **URL:** https://www.superbancos.gob.ec/estadisticas/portalestudios/capcol-bancos/  
+**Fuente:** Superintendencia de Bancos  
 **Periodicidad:** Mensual, desde 2014  
-**Datos:** Captaciones (depósitos) y Colocaciones (cartera de crédito) de bancos privados del Ecuador, desagregados por provincia y cantón.
-
-### Cómo ejecutar
+**Datos:** Captaciones (depósitos) y cartera de crédito de bancos privados, por provincia y cantón.
 
 ```bash
 cd src/captaciones_financiero_privado
-
-# Flujo completo: descarga todo desde 2014 hasta hoy y carga a la BD
-python main.py
-
-# Flujo completo para un rango de años específico
-python main.py --start 2021 --end 2024
-
-# Solo descargar archivos (sin tocar la BD)
-python main.py --download-only
-
-# Solo ejecutar el ETL sobre archivos ya descargados
-python main.py --etl-only
-
-# Procesar únicamente depósitos o únicamente cartera
-python main.py --mode depositos
-python main.py --mode cartera --start 2022
+python main.py                         # flujo completo
+python main.py --start 2021 --end 2024 # rango de años
+python main.py --mode depositos        # solo depósitos
+python main.py --mode cartera          # solo cartera
 ```
 
-### Flujo interno
+**Tablas:**
 
-```
-Portal Superbancos (OneDrive file browser)
-        │
-        ▼  bot.py (Playwright)
-   downloads/captaciones_financiero_privado/
-        <año>/depositos/*.xlsx
-        <año>/cartera/*.xlsx
-        │
-        ├─▶ loader_depositos.py
-        │       stg_captaciones   (staging, todos los intentos)
-        │            └─▶ captaciones   (tabla final consolidada)
-        │
-        └─▶ loader_cartera.py
-                stg_cartera       (staging, todos los intentos)
-                     └─▶ cartera         (tabla final consolidada)
-```
-
-### Tablas en SQL Server
-
-#### `captaciones` — Depósitos bancarios
-
-| Columna | Tipo | Descripción |
-|---|---|---|
-| id | INT | PK (no clustered) |
-| fecha | DATE | Fin de mes del período |
-| entidad | NVARCHAR | Nombre del banco |
-| region | NVARCHAR | Región geográfica |
-| provincia | NVARCHAR | Provincia |
-| canton | NVARCHAR | Cantón |
-| cuenta | NVARCHAR | Código de cuenta contable |
-| tipo_deposito | NVARCHAR | Tipo de depósito (a la vista, plazo, etc.) |
-| numero_clientes | FLOAT | Número de clientes |
-| numero_cuentas | FLOAT | Número de cuentas |
-| saldo | FLOAT | Saldo en USD |
-| hash_registro | NVARCHAR(64) | SHA-256 para deduplicación |
-| fecha_carga | DATETIME | Timestamp de carga |
-
-Índice clustered en `(fecha, provincia, canton)` para consultas geográfico-temporales.
-
-#### `cartera` — Cartera de crédito
-
-| Columna | Tipo | Descripción |
-|---|---|---|
-| id | INT | PK (no clustered) |
-| fecha | DATE | Fin de mes del período |
-| entidad | NVARCHAR | Nombre del banco |
-| provincia | NVARCHAR | Provincia |
-| canton | NVARCHAR | Cantón |
-| tipo_colocacion | NVARCHAR | Segmento de crédito (consumo, comercial, etc.) |
-| subtipo_colocacion | NVARCHAR | Subsegmento (prioritario, ordinario, etc.) |
-| por_vencer | FLOAT | Cartera por vencer (USD) |
-| no_devenga_intereses | FLOAT | Cartera que no devenga intereses (USD) |
-| vencida | FLOAT | Cartera vencida (USD) |
-| total_cartera | FLOAT | Saldo total (USD) |
-| morosidad | FLOAT | Índice de morosidad (ratio) |
-| hash_registro | NVARCHAR(64) | SHA-256 para deduplicación |
-| fecha_carga | DATETIME | Timestamp de carga |
-
-Índice clustered en `(fecha, provincia, canton)`.
-
-### Notas de implementación
-
-- **Variante A / B:** El portal tiene dos estructuras de carpetas según el año. El bot detecta automáticamente si los ZIPs están directamente en la carpeta del año (variante A) o dentro de subcarpetas (variante B).
-- **Hojas tabular vs reporte:** Cada Excel puede tener una hoja de base tabular (datos largos) y una hoja de reporte (datos anchos con fechas como columnas). El loader usa la tabular cuando existe; si no, usa el reporte.
-- **Grupos de métricas:** Las hojas de reporte 2021+ tienen una fila de grupos que indica a qué métrica pertenece cada bloque de columnas de fecha (CARTERA POR VENCER, NO DEVENGA INTERESES, CARTERA VENCIDA, SALDO TOTAL, MOROSIDAD).
-- **Deduplicación:** Cada fila tiene un hash SHA-256 de sus columnas clave. La carga a staging y al final es idempotente: re-ejecutar no duplica datos.
-- **Migración no destructiva:** Si se añaden columnas nuevas a futuro, `_ensure_columns()` las agrega con ALTER TABLE sin recrear las tablas.
+| Tabla | Descripción |
+|---|---|
+| `captaciones` | Depósitos bancarios por entidad, provincia y cantón |
+| `cartera` | Cartera de crédito por segmento, provincia y cantón |
 
 ---
 
-## Dependencias principales
+### `captaciones_financiero_publico`
+
+**URL:** https://www.superbancos.gob.ec/estadisticas/portalestudios/capcol-instituciones-publicas/  
+**Fuente:** Superintendencia de Bancos  
+**Periodicidad:** Mensual  
+**Datos:** Captaciones y cartera de instituciones financieras públicas (BanEcuador, CFN, BEV, etc.).
+
+```bash
+cd src/captaciones_financiero_publico
+python main.py
+python main.py --mode depositos --start 2022
+```
+
+**Tablas:**
+
+| Tabla | Descripción |
+|---|---|
+| `captaciones_publico` | Depósitos de entidades financieras públicas |
+| `cartera_publico` | Cartera de crédito de entidades financieras públicas |
+
+---
+
+### `depositos_gobierno_bce`
+
+**URL:** https://contenido.bce.fin.ec/documentos/informacioneconomica/MonetarioFinanciero/ix_ReportesMonetarios.html  
+**Fuente:** Banco Central del Ecuador  
+**Periodicidad:** Semanal (última semana de cada año, desde 2012)  
+**Datos:** Balance Sectorial del BCE — depósitos del Gobierno Central, extraídos de la hoja IMS4/IMS5.
+
+```bash
+cd src/depositos_gobierno_bce
+python main.py
+python main.py --download-only
+python main.py --etl-only
+```
+
+**Tabla:** `depositos_gobierno_bce`
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| fecha_semana | DATE | Fecha de la semana (última del año) |
+| anio | INT | Año |
+| dep_transferibles_tot | FLOAT | Depósitos transferibles sector público incluídos en dinero amplio (MM USD) |
+| gc_dep_transferibles | FLOAT | Depósitos transferibles Gobierno Central excluídos (MM USD) |
+| otros_dep_tot | FLOAT | Total otros depósitos excluídos (MM USD) |
+| gc_otros_dep | FLOAT | Otros depósitos del Gobierno Central (MM USD) |
+| hash_registro | NVARCHAR(64) | SHA-256 para deduplicación |
+
+**Notas:**
+- Los archivos `.xls` de 2012-2013 usan la hoja `IMS5`; desde 2014 usan `IMS4` (mismo esquema de datos).
+- La detección de hoja es automática por contenido ("BALANCE SECTORIAL: BANCO CENTRAL").
+- Las filas se localizan por etiqueta de texto, no por número fijo, para tolerar cambios de formato año a año.
+
+---
+
+### `empleo`
+
+**URL (trimestral):** https://www.ecuadorencifras.gob.ec/enemdu-trimestral/  
+**URL (mensual):** https://www.ecuadorencifras.gob.ec/estadisticas-laborales-enemdu/  
+**Fuente:** INEC — ENEMDU  
+**Periodicidad:** Trimestral (desde 2020) y Mensual (histórico desde 2007)  
+**Datos:** Mercado laboral — poblaciones, tasas, caracterización del empleo y sectorización.
+
+```bash
+cd src/empleo
+python main.py                             # trimestral + mensual
+python main.py --tipo trimestral
+python main.py --tipo mensual --start 2022
+```
+
+**Tablas:**
+
+| Tabla | Descripción |
+|---|---|
+| `empleo_poblacion` | PEA, PEI, PET, ocupados, desocupados — desagregados por área, edad, sexo, etnia |
+| `empleo_tasas` | Tasas de empleo, desempleo, subempleo, brecha |
+| `empleo_caracterizacion` | Distribución de empleados, plenos, subempleados, desocupados por categoría |
+| `empleo_sectorizacion` | Empleo por sector económico (formal, informal, doméstico, etc.) |
+
+Columna `tipo_periodo`: `'trimestral'` | `'mensual'`
+
+---
+
+### `inflacion_ecuador`
+
+**URL:** https://www.ecuadorencifras.gob.ec/inflacion/  
+**Fuente:** INEC — Índice de Precios al Consumidor (IPC)  
+**Periodicidad:** Mensual (serie histórica desde 1969)  
+**Datos:** Variaciones mensuales/anuales del IPC, indicadores descriptivos, incidencias y variaciones por región y ciudad.
+
+```bash
+cd src/inflacion_ecuador
+python main.py
+python main.py --download-only
+python main.py --etl-only
+```
+
+El bot descarga el ZIP del mes más reciente disponible (sondeo HEAD desde el mes actual hacia atrás). Extrae todos los XLS/XLSX que contiene.
+
+**Tablas:**
+
+| Tabla | Archivo fuente | Descripción |
+|---|---|---|
+| `inflacion_ecuador_variacion_mensual` | `SERIE HISTORICA IPC_*.xls` | Variación mensual del IPC por división CCIF |
+| `inflacion_ecuador_variacion_anual` | `SERIE HISTORICA IPC_*.xls` | Variación anual del IPC por división CCIF |
+| `inflacion_ecuador_indicadores_variacion_mensual` | `ipc_indicadores_descriptivos_*.xlsx` | Indicadores mensuales (general, alimentos, bienes, servicios, etc.) — formato ancho |
+| `inflacion_ecuador_indicadores_variacion_anual` | `ipc_indicadores_descriptivos_*.xlsx` | Indicadores anuales — formato ancho |
+| `inflacion_ecuador_series_incidencias_mensual` | `ipc_incid_nac_div_*.xlsx` | Incidencias mensuales por división CCIF |
+| `inflacion_ecuador_series_incidencias_anual` | `ipc_incid_nac_div_*.xlsx` | Incidencias anuales por división CCIF |
+| `inflacion_ecuador_series_ipc_mensual` | `ipc_var_men_nac_reg_ciud[_emp]_*.xlsx` | Variación mensual por región/ciudad y CCIF (normal + empalmada) |
+| `inflacion_ecuador_series_ipc_anual` | `ipc_var_anu_nac_reg_ciud[_emp]_*.xlsx` | Variación anual por región/ciudad y CCIF (normal + empalmada) |
+
+Columna `es_empalmada`: `'Si'` | `'No'`  
+Se excluyen hojas: Esmeraldas, Machala, Sto. Domingo.
+
+---
+
+### Otras fuentes
+
+| Módulo | Fuente | Periodicidad | Tabla(s) |
+|---|---|---|---|
+| `reservas_internacionales` | BCE | Mensual | `reservas_internacionales` |
+| `riesgo_pais` | BCE | Diario | `riesgo_pais` |
+| `tipo_de_cambio` | BCE | Diario | `tipo_de_cambio` |
+| `ventas_actividad_economica_sri` | SRI | Mensual | `ventas_actividad_economica_sri` |
+| `recaudacion_mensual` | SRI | Mensual | `recaudacion_mensual` |
+| `recaudacion_provincial` | SRI | Mensual | `recaudacion_provincial` |
+| `pib_nominal` | BCE | Trimestral | `pib_nominal` |
+| `pib_nominal_industria` | BCE | Trimestral | `pib_nominal_industria` |
+| `pib_per_capita_nominal` | BCE | Anual | `pib_per_capita_nominal` |
+| `pib_industria` | BCE | Trimestral | `pib_industria` |
+
+---
+
+## Dependencias
 
 ```
 pandas          manipulación de DataFrames
-openpyxl        lectura de archivos Excel (.xlsx)
+openpyxl        lectura de archivos .xlsx
+xlrd            lectura de archivos .xls (formato Excel 97-2003)
 sqlalchemy      ORM y engine para SQL Server
 pyodbc          driver ODBC para SQL Server
-playwright      automatización del browser para descarga
+playwright      automatización del browser (portales con JS)
+requests        descarga directa de archivos (HEAD probing + GET)
 ```
 
 ---
 
-## Convenciones de código
+## Convenciones de implementación
 
-Cada fuente sigue el mismo patrón de tres archivos:
-
-- **`bot.py`** — Solo descarga: navega el portal, descarga ZIPs, extrae Excels en `downloads/`.
-- **`loader_*.py`** — Solo ETL: lee los Excels extraídos, transforma y carga en SQL Server.
-- **`main.py`** — Punto de entrada con CLI: orquesta bot + loaders con argumentos de línea de comandos.
+- **Deduplicación:** cada fila tiene un hash SHA-256. La carga es idempotente — re-ejecutar no duplica datos.
+- **PK no clusterizada + índice clustered:** `BIGINT IDENTITY` como PK física nonclustered; el índice clustered se crea por las columnas de consulta más frecuentes (fecha, región, etc.).
+- **Skip inteligente:** el bot verifica si el archivo ya está en disco antes de descargar; el loader verifica hashes antes de insertar.
+- **Tolerancia a cambios de formato:** los parsers buscan datos por etiqueta de texto o patrón de cabecera, no por número de fila fijo, para tolerar reestructuraciones anuales del BCE/INEC.

@@ -34,6 +34,7 @@ SRC = Path(__file__).resolve().parent / "src"
 # (nombre, kwargs para run())
 _MODULES = [
     ("riesgo_pais",                    {}),
+    ("tipo_de_cambio",                 {}),
     ("reservas_internacionales",       {}),
     ("depositos_gobierno_bce",         {}),
     ("inflacion_ecuador",              {}),

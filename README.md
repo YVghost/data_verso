@@ -61,6 +61,7 @@ data_verso/
 │   ├── inflacion_ecuador/                ✓ implementado
 │   ├── reservas_internacionales/         ✓ implementado
 │   ├── riesgo_pais/                      ✓ implementado
+│   ├── tipo_de_cambio/                   ✓ implementado
 │   │
 │   ├── captaciones_financiero_privado/   ⚠ parcial (loader listo, bot pendiente)
 │   │
@@ -284,7 +285,6 @@ Los siguientes módulos tienen estructura de carpeta y archivos vacíos (stubs),
 | `pib_industria` | BCE | Trimestral | PIB por industria (variación) |
 | `recaudacion_mensual` | SRI | Mensual | Recaudación tributaria mensual |
 | `recaudacion_provincial` | SRI | Mensual | Recaudación tributaria por provincia |
-| `tipo_de_cambio` | BCE | Diario | Tipo de cambio referencial |
 | `ventas_actividad_economica_sri` | SRI | Mensual | Ventas por actividad económica |
 
 ---

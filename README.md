@@ -65,14 +65,12 @@ data_verso/
 │   ├── tipo_de_cambio/                   ✓ implementado
 │   │
 │   ├── captaciones_financiero_privado/   ⚠ parcial (loader listo, bot pendiente)
+│   ├── recaudacion_mensual/              ✓ implementado
 │   │
 │   ├── pib_nominal/                      ✗ pendiente
 │   ├── pib_nominal_industria/            ✗ pendiente
-│   ├── pib_per_capita_nominal/           ✗ pendiente
 │   ├── pib_industria/                    ✗ pendiente
-│   ├── recaudacion_mensual/              ✗ pendiente
 │   ├── recaudacion_provincial/           ✗ pendiente
-│   ├── tipo_de_cambio/                   ✗ pendiente
 │   └── ventas_actividad_economica_sri/   ✗ pendiente
 │
 ├── downloads/                  # Archivos descargados (ignorados por git)
@@ -273,6 +271,47 @@ python main.py --dry-run   # descarga y muestra sin cargar a BD
 
 ---
 
+### `recaudacion_mensual`
+
+**URL:** https://descargas.sri.gob.ec/download/datosAbiertos/sri_recaudacion_{YEAR}.csv
+**Fuente:** Servicio de Rentas Internas (SRI)
+**Periodicidad:** Anual (archivo por año), datos mensuales internos — 2017 al año actual
+**Datos:** Recaudación tributaria mensual por impuesto, tipo de contribuyente, provincia y cantón.
+
+```bash
+cd src/recaudacion_mensual
+python main.py                  # descarga + ETL (2017 al año actual)
+python main.py --download-only  # solo descarga
+python main.py --etl-only       # ETL sobre archivos ya en disco
+python main.py --start 2022     # desde 2022
+```
+
+**Tabla `recaudacion_mensual`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `anio` | INT | Año del dato |
+| `mes_num` | TINYINT | Número de mes (1-12) — índice clustered |
+| `mes` | NVARCHAR(30) | Nombre del mes ("Enero", etc.) |
+| `grupo_impuesto` | NVARCHAR(300) | Grupo del impuesto |
+| `subgrupo_impuesto` | NVARCHAR(300) | Subgrupo del impuesto |
+| `impuesto` | NVARCHAR(500) | Nombre del impuesto |
+| `gran_contribuyente` | NVARCHAR(10) | Indicador gran contribuyente (S/N) |
+| `codigo_opera_familia` | NVARCHAR(100) | Código operativo de familia |
+| `tipo_contribuyente` | NVARCHAR(200) | Tipo de contribuyente |
+| `provincia` | NVARCHAR(100) | Provincia |
+| `canton` | NVARCHAR(200) | Cantón |
+| `valor_recaudado` | FLOAT | Monto recaudado en USD |
+
+**Notas:**
+- Archivos CSV pipe-separated (`|`); encoding `utf-8-sig` (2017) y `latin-1` (2018+).
+- `VALOR_RECAUDADO` usa coma como separador decimal: `"88123,17"` → `88123.17`.
+- Deduplicación por `(anio, mes_num)`: meses ya cargados se omiten sin releer.
+- Índice clustered en `(anio, mes_num)` para ordenamiento calendario natural.
+- ~600 000–700 000 filas por año; lectura en chunks de 50 000 filas.
+
+---
+
 ## Pendiente de implementar
 
 Los siguientes módulos tienen estructura de carpeta y archivos vacíos (stubs), pero aún no tienen bot ni loader funcionales:
@@ -283,7 +322,6 @@ Los siguientes módulos tienen estructura de carpeta y archivos vacíos (stubs),
 | `pib_nominal` | BCE | Trimestral | PIB nominal total |
 | `pib_nominal_industria` | BCE | Trimestral | PIB nominal por industria |
 | `pib_industria` | BCE | Trimestral | PIB por industria (variación) |
-| `recaudacion_mensual` | SRI | Mensual | Recaudación tributaria mensual |
 | `recaudacion_provincial` | SRI | Mensual | Recaudación tributaria por provincia |
 | `ventas_actividad_economica_sri` | SRI | Mensual | Ventas por actividad económica |
 

@@ -60,6 +60,7 @@ data_verso/
 │   ├── empleo/                           ✓ implementado
 │   ├── inflacion_ecuador/                ✓ implementado
 │   ├── reservas_internacionales/         ✓ implementado
+│   ├── pib_per_capita_nominal/           ✓ implementado
 │   ├── riesgo_pais/                      ✓ implementado
 │   ├── tipo_de_cambio/                   ✓ implementado
 │   │
@@ -281,7 +282,6 @@ Los siguientes módulos tienen estructura de carpeta y archivos vacíos (stubs),
 | `captaciones_financiero_privado` | Superbancos | Mensual | Loader listo; falta bot de descarga |
 | `pib_nominal` | BCE | Trimestral | PIB nominal total |
 | `pib_nominal_industria` | BCE | Trimestral | PIB nominal por industria |
-| `pib_per_capita_nominal` | BCE | Anual | PIB per cápita nominal |
 | `pib_industria` | BCE | Trimestral | PIB por industria (variación) |
 | `recaudacion_mensual` | SRI | Mensual | Recaudación tributaria mensual |
 | `recaudacion_provincial` | SRI | Mensual | Recaudación tributaria por provincia |

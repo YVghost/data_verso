@@ -1,38 +1,88 @@
-import sys
-import pandas as pd
-from datetime import datetime
-from pathlib import Path
+"""
+Bot de descarga: PIB Per Capita Nominal — BCE Ecuador
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-from utils.normalizer import clean_dataframe, normalize_numeric
+Fuente: JSON estatico del BCE (mismo archivo que otros indicadores CNA).
+URL   : https://contenido.bce.fin.ec/documentos/informacioneconomica/
+        indicadores/real/datos_cna.json
 
-DOWNLOAD_DIR = Path(__file__).resolve().parents[2] / "downloads" / "pib_per_capita_nominal"
-DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+No requiere Playwright — descarga directa con requests.
 
-HIST_START_YEAR = 2000
+Filtro: Indicador contiene "PIB Per" y Codigo Variable Dinamica == "val_var10"
+Periodicidad: Anual (2000-presente)
+Unidad: USD per capita
+"""
 
+import json
+from datetime import date
 
-def download(start_year: int = None, end_year: int = None) -> pd.DataFrame:
-    """Descarga, normaliza y filtra el PIB per cápita nominal anual."""
-    raw = _scrape()
-    df = _normalize(raw)
-    return _filter(df, start_year, end_year)
+import requests
 
-
-def _scrape() -> pd.DataFrame:
-    # TODO: navegar a SectorReal, abrir recuadro PIB per cápita, tres puntos > Serie Histórica,
-    #       seleccionar rango 2000-actual, tres rayas > Descargar Excel "pib-per-cpita-nominal".
-    raise NotImplementedError("Implementar scraping con Playwright")
-
-
-def _normalize(df: pd.DataFrame) -> pd.DataFrame:
-    df = clean_dataframe(df)
-    df["anio"] = pd.to_numeric(df["anio"], errors="coerce")
-    df["pib_per_capita_usd"] = normalize_numeric(df["pib_per_capita_usd"])
-    return df
+JSON_URL  = (
+    "https://contenido.bce.fin.ec/documentos/informacioneconomica"
+    "/indicadores/real/datos_cna.json"
+)
+_JSON_KEY = "view_ind_real_cna"
+_VAR_CODE = "val_var10"
+TIMEOUT   = 30
 
 
-def _filter(df: pd.DataFrame, start_year: int, end_year: int) -> pd.DataFrame:
-    s = start_year or HIST_START_YEAR
-    e = end_year or datetime.today().year
-    return df[(df["anio"] >= s) & (df["anio"] <= e)].reset_index(drop=True)
+# ---------------------------------------------------------------------------
+# Punto de entrada
+# ---------------------------------------------------------------------------
+
+def fetch() -> list[dict]:
+    """
+    Descarga el JSON BCE y retorna registros de PIB Per Capita Nominal
+    como lista de dicts:
+      [{"anio": int, "pib_per_capita_usd": float, "fecha_actualizacion": str}, ...]
+    """
+    print("[pib_pc] Descargando datos BCE...")
+    resp = requests.get(JSON_URL, timeout=TIMEOUT)
+    resp.raise_for_status()
+    data = json.loads(resp.content.decode("utf-8"))
+
+    rows = data.get(_JSON_KEY, [])
+    print(f"[pib_pc] Total registros en JSON: {len(rows)}")
+
+    records = []
+    for row in rows:
+        if not _is_pib_percapita(row):
+            continue
+        fecha = row.get("Fecha", "")
+        if not fecha:
+            continue
+        try:
+            anio = int(fecha[:4])
+        except (ValueError, TypeError):
+            continue
+        valor = _to_float(row.get("Valor"))
+        if valor is None:
+            continue
+        records.append({
+            "anio":               anio,
+            "pib_per_capita_usd": valor,
+            "fecha_actualizacion": (row.get("Carga") or "")[:10] or None,
+        })
+
+    records.sort(key=lambda r: r["anio"])
+    print(f"[pib_pc] Registros encontrados: {len(records)} ({records[0]['anio']}-{records[-1]['anio']})" if records else "[pib_pc] Sin registros.")
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _is_pib_percapita(row: dict) -> bool:
+    indicador = row.get("Indicador", "")
+    codigo    = row.get("Código Variable Dinámica", "") or row.get("Codigo Variable Dinamica", "")
+    return "PIB Per" in indicador and codigo == _VAR_CODE
+
+
+def _to_float(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(str(v).strip())
+    except (ValueError, TypeError):
+        return None

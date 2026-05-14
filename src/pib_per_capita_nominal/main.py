@@ -1,11 +1,20 @@
 """
-Fuente  : BCE - PIB per cápita nominal
-URL     : https://contenido.bce.fin.ec/documentos/informacioneconomica/SectorReal/ix_SectorRealPrin.html#
-Periodicidad: Anual
-Instrucción : Sector Real > PIB per cápita nominal > tres puntos > Serie Histórica >
-              rango 2000-2025 > tres rayas > Descargar Excel ("pib-per-cpita-nominal").
+Fuente      : BCE - PIB Per Capita Nominal
+URL         : https://contenido.bce.fin.ec/documentos/informacioneconomica/
+              indicadores/real/PIBPerCapita.html
+JSON        : datos_cna.json (mismo archivo que otros indicadores CNA)
+Periodicidad: Anual (2000-presente)
+Tabla       : pib_per_capita_nominal
+
+No requiere Playwright — JSON directo del BCE.
+
+Modos de ejecucion
+------------------
+    python main.py              # fetch + carga BD
+    python main.py --dry-run    # muestra datos sin cargar
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -16,26 +25,23 @@ import bot
 import loader
 
 
-def extract_fixed_range(start_year: int, end_year: int):
-    """Extrae PIB per cápita nominal entre start_year y end_year."""
-    df = bot.download(start_year=start_year, end_year=end_year)
-    loader.load(df)
-    return df
+def run(dry_run: bool = False) -> None:
+    records = bot.fetch()
 
+    if dry_run:
+        print(f"[pib_pc] Dry-run: {len(records)} registros, sin cargar a BD.")
+        for r in records:
+            print(f"  {r['anio']}  USD {r['pib_per_capita_usd']:,.1f}")
+        return
 
-def extract_to_current():
-    """Extrae PIB per cápita nominal desde 2000 hasta el año en curso."""
-    df = bot.download()
-    loader.load(df)
-    return df
-
-
-def extract_to_specific_date(target_year: int):
-    """Extrae PIB per cápita nominal hasta target_year."""
-    df = bot.download(end_year=target_year)
-    loader.load(df)
-    return df
+    loader.load(records)
 
 
 if __name__ == "__main__":
-    extract_to_current()
+    parser = argparse.ArgumentParser(
+        description="ETL - PIB Per Capita Nominal BCE Ecuador"
+    )
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Muestra los datos sin insertar en la BD")
+    args = parser.parse_args()
+    run(dry_run=args.dry_run)

@@ -1,7 +1,7 @@
 """
 ETL loader: Recaudacion Mensual SRI Ecuador
 
-Tabla: recaudacion_mensual
+Tabla: recaudacion_mensual_provincial
 Columnas fuente (11 cols):
   ANIO | MES | GRUPO_IMPUESTO | SUBGRUPO_IMPUESTO | IMPUESTO |
   GRAN_CONTRIBUYENTE | CODIGO_OPERA_FAMILIA | TIPO_CONTRIBUYENTE |
@@ -28,11 +28,11 @@ from sqlalchemy import text
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from utils.base_engine import get_master_engine
 
-_TABLE     = "recaudacion_mensual"
+_TABLE     = "recaudacion_mensual_provincial"
 _CHUNKSIZE = 50_000
 
 _DDL = """
-CREATE TABLE recaudacion_mensual (
+CREATE TABLE recaudacion_mensual_provincial (
     id                    BIGINT IDENTITY(1,1) NOT NULL,
     anio                  INT            NOT NULL,
     mes_num               TINYINT        NOT NULL,
@@ -47,10 +47,10 @@ CREATE TABLE recaudacion_mensual (
     canton                NVARCHAR(200)  NULL,
     valor_recaudado       FLOAT          NULL,
     fecha_carga           DATETIME2      DEFAULT GETDATE(),
-    CONSTRAINT PK_recaudacion_mensual PRIMARY KEY NONCLUSTERED (id)
+    CONSTRAINT PK_recaudacion_mensual_provincial PRIMARY KEY NONCLUSTERED (id)
 )"""
 
-_IDX = "CREATE CLUSTERED INDEX CIX_recaudacion_mensual ON recaudacion_mensual (anio, mes_num)"
+_IDX = "CREATE CLUSTERED INDEX CIX_recaudacion_mensual_provincial ON recaudacion_mensual_provincial (anio, mes_num)"
 
 # Abreviaturas de mes en español (formato 2026: "1-ene")
 _MES_ABBR: dict[str, tuple[int, str]] = {

@@ -286,7 +286,7 @@ python main.py --etl-only       # ETL sobre archivos ya en disco
 python main.py --start 2022     # desde 2022
 ```
 
-**Tabla `recaudacion_mensual`:**
+**Tabla `recaudacion_mensual_provincial`:**
 
 | Columna | Tipo | Descripción |
 |---|---|---|

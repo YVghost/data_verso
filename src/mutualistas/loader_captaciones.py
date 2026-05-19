@@ -2,24 +2,16 @@
 ETL loader: Captaciones Mutualistas — SEPS Ecuador
 
 Tablas:
-  mutualistas_captaciones   — hoja Base_captaciones de archivos *_Mut*.xlsm
-  mutualistas_captaciones_sectores      — hoja Base_captaciones de archivos *_S1/S2/S3*.xlsm
-                              + columna 'sector' (1, 2 o 3)
-  mutualistas_captaciones_bruto         — archivo TXT tab-separado de cada ZIP de bases
+  mutualistas_captaciones          — reportes Mut  (xlsm/xlsx/txt/csv)
+  mutualistas_captaciones_sectores — reportes S1/S2/S3 + columna sector
+  mutualistas_captaciones_bruto    — bases granulares (xlsm/xlsx/txt/csv)
 
-Deduplicacion: hash SHA-256 por registro. Mes-por-mes: si todos los hashes
-de un (anio, mes) ya existen en BD, ese bloque se omite.
+Formatos aceptados en cada ZIP:
+  .xlsm / .xlsx  — openpyxl; hoja detectada automaticamente
+  .txt  / .csv   — pandas read_csv; encoding y separador auto-detectados
+  ZIPs anidados  — anterior.zip contiene 2016.zip, 2017.zip, etc.
 
-Columnas fuente Base_captaciones (xlsm):
-  SALDO | NUMERO DE CLIENTES | NUMERO DE CUENTAS | FECHA DE CORTE |
-  REGION | PROVINCIA | CANTON | TIPO DE DEPOSITO | ESTADO OPERACION |
-  RUC | RAZON SOCIAL
-
-Columnas fuente TXT (tab-separated, con valores entre comillas):
-  TIPO_PERSONA | FECHA_CORTE | SEGMENTO | PROVINCIA | CANTON | PARROQUIA |
-  DPAPARROQUIA | ESTADO_OPERACION | TIPO_CUENTA | BANDAMADURACION | SEXO |
-  RANGOEDAD | NIVELINSTRUCCION | RANGOSALDO | NROCUENTAS | SALDO (USD) |
-  NRODEPOSITANTES
+Deduplicacion: hash SHA-256 por registro. Re-ejecutar es idempotente.
 """
 
 import hashlib

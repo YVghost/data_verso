@@ -5,13 +5,18 @@ Ejecuta todos los ETL implementados en orden. Cada modulo corre de forma
 independiente: si uno falla, los demas continuan.
 
 Orden de ejecucion:
-  1. riesgo_pais                    JSON directo BCE   (mas rapido, sin Playwright)
-  2. reservas_internacionales       BCE Excel
-  3. depositos_gobierno_bce         BCE XLS/XLSX semanales (2012-presente)
-  4. inflacion_ecuador              INEC ZIP mensual
-  5. empleo                         INEC CSVs trimestrales + mensuales
-  6. captaciones_financiero_publico Superbancos ZIPs anuales
-  7. captaciones_financiero_privado Superbancos ZIPs anuales
+  1.  riesgo_pais                    JSON directo BCE   (sin Playwright)
+  2.  pib_per_capita_nominal         BCE Excel
+  3.  tipo_de_cambio                 BCE Excel
+  4.  reservas_internacionales       BCE Excel
+  5.  depositos_gobierno_bce         BCE XLS/XLSX semanales (2012-presente)
+  6.  inflacion_ecuador              INEC ZIP mensual
+  7.  empleo                         INEC CSVs trimestrales + mensuales
+  8.  captaciones_financiero_publico Superbancos ZIPs anuales
+  9.  captaciones_financiero_privado Superbancos ZIPs anuales
+  10. recaudacion_mensual            SRI CSVs anuales (2017-presente)
+  11. mutualistas                    SEPS ZIPs anuales — captaciones (3 tablas)
+                                      + colocaciones (8 tablas), 2017-presente
 
 Uso:
   python main.py                              # todos los modulos

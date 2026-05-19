@@ -498,10 +498,17 @@ def _load_xlsm_zip(zip_path: Path, sheet_name: str, parser,
                 wb = openpyxl.load_workbook(
                     io.BytesIO(zf.read(fname)), read_only=True, data_only=True
                 )
-                if sheet_name not in wb.sheetnames:
+                # Buscar hoja: exacto → keyword → cualquier "base" → primera
+                _kw = sheet_name.split("_")[-1].lower()
+                _sh = (sheet_name if sheet_name in wb.sheetnames else None)
+                if _sh is None:
+                    _cands = [s for s in wb.sheetnames
+                              if _kw in s.lower() or "base" in s.lower()]
+                    _sh = _cands[0] if _cands else (wb.sheetnames[0] if wb.sheetnames else None)
+                if _sh is None:
                     wb.close()
                     continue
-                ws   = wb[sheet_name]
+                ws   = wb[_sh]
                 rows = list(ws.iter_rows(values_only=True))
                 wb.close()
             except Exception as ex:

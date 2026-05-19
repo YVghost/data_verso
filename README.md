@@ -56,6 +56,7 @@ data_verso/
 │
 ├── src/
 │   ├── captaciones_financiero_publico/   ✓ implementado
+│   ├── captaciones_financiero_privado/   ✓ implementado
 │   ├── depositos_gobierno_bce/           ✓ implementado
 │   ├── empleo/                           ✓ implementado
 │   ├── inflacion_ecuador/                ✓ implementado
@@ -63,16 +64,13 @@ data_verso/
 │   ├── pib_per_capita_nominal/           ✓ implementado
 │   ├── riesgo_pais/                      ✓ implementado
 │   ├── tipo_de_cambio/                   ✓ implementado
-│   │
-│   ├── captaciones_financiero_privado/   ⚠ parcial (loader listo, bot pendiente)
 │   ├── recaudacion_mensual/              ✓ implementado
 │   ├── mutualistas/                      ✓ implementado
 │   │
-│   ├── pib_nominal/                      ✗ pendiente
-│   ├── pib_nominal_industria/            ✗ pendiente
-│   ├── pib_industria/                    ✗ pendiente
-│   ├── recaudacion_provincial/           ✗ pendiente
-│   └── ventas_actividad_economica_sri/   ✗ pendiente
+│   ├── pib_nominal/                      ✗ pendiente (stub)
+│   ├── pib_nominal_industria/            ✗ pendiente (stub)
+│   ├── pib_industria/                    ✗ pendiente (stub)
+│   └── ventas_actividad_economica_sri/   ✗ pendiente (stub)
 │
 ├── downloads/                  # Archivos descargados (ignorados por git)
 ├── requirements.txt
@@ -115,6 +113,40 @@ python main.py --mode depositos --start 2022
 |---|---|
 | `captaciones_publico` | Depósitos de entidades financieras públicas por provincia y cantón |
 | `cartera_publico` | Cartera de crédito de entidades financieras públicas |
+
+---
+
+### `captaciones_financiero_privado`
+
+**URL:** https://www.superbancos.gob.ec/estadisticas/portalestudios/capcol-bancos/
+**Fuente:** Superintendencia de Bancos
+**Periodicidad:** Mensual (archivos anuales desde 2014)
+**Datos:** Captaciones (depósitos) y colocaciones (cartera) de bancos privados — Banca Privada, por entidad, provincia y subtipo de crédito.
+
+```bash
+cd src/captaciones_financiero_privado
+python main.py                          # descarga + ETL (2014 al año actual)
+python main.py --start 2021 --end 2024  # rango específico
+python main.py --download-only          # solo descarga ZIPs y extrae Excels
+python main.py --etl-only               # ETL sobre Excels ya en disco
+python main.py --mode depositos         # solo captaciones
+python main.py --mode cartera           # solo colocaciones
+```
+
+**Tablas:**
+
+| Tabla | Descripción |
+|---|---|
+| `captaciones_privadas` | Depósitos de bancos privados — saldo, número de clientes/cuentas, tipo de depósito, por entidad y período |
+| `cartera_privadas` | Cartera de crédito de bancos privados — por vencer / no devenga / vencida / total, por tipo de colocación y entidad |
+
+**Tablas de staging (intermedias):** `stg_captaciones_privadas`, `stg_cartera_privadas`
+
+**Notas:**
+- El bot usa **Playwright** para navegar el portal OneDrive de Superbancos (requiere `playwright install chromium`).
+- Detecta automáticamente si los archivos están en la carpeta del año directamente (Variante A) o en subcarpetas (Variante B).
+- Variantes de Excel según año: formato reporte (2014–2020, solo `por_vencer`) y formato tabular (2021+, 4 métricas).
+- Deduplicación por hash SHA-256; re-ejecutar es idempotente.
 
 ---
 
@@ -315,53 +347,66 @@ python main.py --start 2022     # desde 2022
 
 ### `mutualistas`
 
-**URL:** https://estadisticas.seps.gob.ec/index.php/estadisticas-sfps/
+**URL:** https://estadisticas.seps.gob.ec/index.php/estadisticas-sfps/#cartera_credito
 **Fuente:** Superintendencia de Economía Popular y Solidaria (SEPS)
-**Periodicidad:** Mensual (archivos anuales que se actualizan durante el año)
-**Datos:** Captaciones de mutualistas y cooperativas de ahorro y crédito (segmentos 1, 2, 3).
+**Periodicidad:** Mensual (archivos anuales actualizados durante el año)
+**Datos:** Captaciones y colocaciones de mutualistas y cooperativas (segmentos 1, 2, 3) — 2017 al año actual.
 
 ```bash
 cd src/mutualistas
-python main.py                  # descarga + ETL (2017 al año actual)
-python main.py --download-only  # solo descarga ZIPs
-python main.py --etl-only       # ETL sobre ZIPs ya en disco
-python main.py --start 2022     # desde 2022
+python main.py                   # descarga + ETL completo (2017 al año actual)
+python main.py --download-only   # solo descarga ZIPs
+python main.py --etl-only        # ETL sobre ZIPs ya en disco
+python main.py --start 2022      # desde 2022
+python main.py --captaciones     # solo flujo de captaciones
+python main.py --colocaciones    # solo flujo de colocaciones
 ```
 
-**Archivos fuente:**
+**Formatos de archivo aceptados:** `.xlsm`, `.xlsx`, `.xltm`, `.txt`, `.csv` — todos los loaders detectan el formato automáticamente y ajustan parser, encoding y separador.
 
-| Tipo | Contenido | Formato |
+#### Captaciones (3 tablas)
+
+| Tabla | Fuente | Descripción |
 |---|---|---|
-| Reportes (ZIP) | 4 xlsm por año: `*_Mut`, `*_S1`, `*_S2`, `*_S3` | Excel macro `.xlsm`, hoja `Base_captaciones` |
-| Bases (ZIP) | 1 TXT por año | Tab-separated, valores entre comillas |
+| `mutualistas_captaciones` | Reportes `*_Mut*` | Captaciones de asociaciones mutualistas |
+| `mutualistas_captaciones_sectores` | Reportes `*_S1/S2/S3*` | Captaciones por segmento de cooperativas + columna `sector` (1/2/3) |
+| `mutualistas_captaciones_bruto` | Bases anuales | Base granular: tipo persona, parroquia, banda maduración, sexo, rango edad, nivel instrucción |
 
-**Tablas:**
+Descargadores: `bot.py` — ZIP de reportes por año (desde 2020 individual; 2015–2019 en ZIP histórico) y ZIP de bases por año (desde 2018 individual; pre-2018 en ZIP histórico).
 
-| Tabla | Origen | Descripción |
+#### Colocaciones (8 tablas)
+
+| Tabla | Fuente | Descripción |
 |---|---|---|
-| `captaciones_mutualistas` | Archivos `*_Mut*.xlsm` | Captaciones de asociaciones mutualistas |
-| `captaciones_sectores` | Archivos `*_S1/S2/S3*.xlsm` | Captaciones por segmento de cooperativas, columna `sector` (1/2/3) |
-| `captaciones_bruto` | TXT de cada ZIP de bases | Base granular: tipo persona, parroquia, banda maduración, sexo, rango edad, nivel instrucción |
+| `mutualistas_colocaciones_volumen_credito` | Volumen mensual `*_Mut*` | Volumen de crédito mensual — mutualistas |
+| `mutualistas_colocaciones_volumen_credito_sectores` | Volumen mensual `*_S1/S2/S3*` | Volumen de crédito mensual — cooperativas por segmento |
+| `mutualistas_colocaciones` | Colocaciones `*_Mut*` | Colocaciones mensuales — mutualistas |
+| `mutualistas_colocaciones_sectores` | Colocaciones `*_S1/S2/S3*` | Colocaciones mensuales — cooperativas por segmento |
+| `mutualistas_colocaciones_volumen_credito_bruto` | Bases TXT volumen | Base granular de volumen: actividad CIIU, provincia, tipo crédito, sexo, rango monto/plazo |
+| `mutualistas_colocaciones_mensual_bruto` | Bases TXT Deflate64 (~2.8 GB) | Base granular de colocaciones: saldo por vencer/vencido/no devenga por segmento, CIIU y parroquia |
+| `mutualistas_colocaciones_tarjetas_con_forma_pago` | Tarjetas ZIP — archivo "con" | Cartera de tarjetas de crédito por forma de pago, sexo, instrucción, rango edad |
+| `mutualistas_colocaciones_tarjetas_sin_forma_pago` | Tarjetas ZIP — archivo "sin" | Cartera de tarjetas de crédito por sexo, instrucción, rango edad; número de tarjetas y tarjetahabientes |
 
-**Notas:**
-- Detecta dinámicamente la URL del año actual en cada ejecución (la SEPS puede cambiar el `download_id`).
-- Cambios en archivos históricos detectados via ETag; si coincide, se omite la descarga.
-- ZIP "años anteriores" cubre 2015–2019 (reportes) y pre-2018 (bases).
-- Deduplicación por hash SHA-256 (reportes) y fecha de corte mensual (bases).
+Descargador: `bot_colocaciones.py` — 5 tipos de ZIP anuales, cada uno con ZIP histórico previo al primer año individual.
+
+**Notas técnicas:**
+- Detección de cambios via **ETag HTTP** (sidecar `.etag`); archivos históricos se omiten si ya están en disco.
+- Archivos `col_bruto` usan compresión **Deflate64** (compress_type=9); requiere `pip install inflate64`.
+- Hoja Excel detectada automáticamente: prueba nombre conocido → keyword → primera hoja con datos.
+- ZIP "anterior" cubre años pre-individuales (pre-2020 captaciones, pre-2017 col_bruto, etc.).
+- Deduplicación por **hash SHA-256** por registro; re-ejecutar no duplica datos.
 
 ---
 
 ## Pendiente de implementar
 
-Los siguientes módulos tienen estructura de carpeta y archivos vacíos (stubs), pero aún no tienen bot ni loader funcionales:
+Los siguientes módulos tienen carpeta con stubs pero sin bot ni loader funcionales:
 
 | Módulo | Fuente | Periodicidad | Descripción |
 |---|---|---|---|
-| `captaciones_financiero_privado` | Superbancos | Mensual | Loader listo; falta bot de descarga |
 | `pib_nominal` | BCE | Trimestral | PIB nominal total |
 | `pib_nominal_industria` | BCE | Trimestral | PIB nominal por industria |
 | `pib_industria` | BCE | Trimestral | PIB por industria (variación) |
-| `recaudacion_provincial` | SRI | Mensual | Recaudación tributaria por provincia |
 | `ventas_actividad_economica_sri` | SRI | Mensual | Ventas por actividad económica |
 
 ---
@@ -370,13 +415,16 @@ Los siguientes módulos tienen estructura de carpeta y archivos vacíos (stubs),
 
 ```
 pandas          manipulación de DataFrames
-openpyxl        lectura de archivos .xlsx
+openpyxl        lectura de archivos .xlsx / .xlsm
 xlrd            lectura de archivos .xls (formato Excel 97-2003)
 sqlalchemy      ORM y engine para SQL Server
 pyodbc          driver ODBC para SQL Server
 playwright      automatización del browser (portales con JS)
 requests        descarga directa de archivos y APIs JSON
+inflate64       descompresión Deflate64 (requerido para mutualistas col_bruto)
 ```
+
+> **Nota:** `inflate64` se instala con `pip install inflate64`. Si no está instalado, el loader de `mutualistas_colocaciones_mensual_bruto` se omite automáticamente con un aviso, sin afectar al resto del pipeline.
 
 ---
 

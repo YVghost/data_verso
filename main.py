@@ -43,6 +43,7 @@ _MODULES = [
     ("captaciones_financiero_publico", {}),
     ("captaciones_financiero_privado", {}),
     ("recaudacion_mensual",           {}),
+    ("mutualistas",                   {}),
 ]
 
 
@@ -53,7 +54,8 @@ _MODULES = [
 _GENERIC_NAMES = {
     "bot", "loader", "loader_depositos", "loader_cartera",
     "loader_cartera_privada", "loader_depositos_privado",
-    "loader_recaudacion",
+    "loader_recaudacion", "loader_captaciones",
+    "bot_colocaciones", "loader_colocaciones",
 }
 
 

@@ -66,6 +66,7 @@ data_verso/
 │   │
 │   ├── captaciones_financiero_privado/   ⚠ parcial (loader listo, bot pendiente)
 │   ├── recaudacion_mensual/              ✓ implementado
+│   ├── mutualistas/                      ✓ implementado
 │   │
 │   ├── pib_nominal/                      ✗ pendiente
 │   ├── pib_nominal_industria/            ✗ pendiente
@@ -309,6 +310,44 @@ python main.py --start 2022     # desde 2022
 - Deduplicación por `(anio, mes_num)`: meses ya cargados se omiten sin releer.
 - Índice clustered en `(anio, mes_num)` para ordenamiento calendario natural.
 - ~600 000–700 000 filas por año; lectura en chunks de 50 000 filas.
+
+---
+
+### `mutualistas`
+
+**URL:** https://estadisticas.seps.gob.ec/index.php/estadisticas-sfps/
+**Fuente:** Superintendencia de Economía Popular y Solidaria (SEPS)
+**Periodicidad:** Mensual (archivos anuales que se actualizan durante el año)
+**Datos:** Captaciones de mutualistas y cooperativas de ahorro y crédito (segmentos 1, 2, 3).
+
+```bash
+cd src/mutualistas
+python main.py                  # descarga + ETL (2017 al año actual)
+python main.py --download-only  # solo descarga ZIPs
+python main.py --etl-only       # ETL sobre ZIPs ya en disco
+python main.py --start 2022     # desde 2022
+```
+
+**Archivos fuente:**
+
+| Tipo | Contenido | Formato |
+|---|---|---|
+| Reportes (ZIP) | 4 xlsm por año: `*_Mut`, `*_S1`, `*_S2`, `*_S3` | Excel macro `.xlsm`, hoja `Base_captaciones` |
+| Bases (ZIP) | 1 TXT por año | Tab-separated, valores entre comillas |
+
+**Tablas:**
+
+| Tabla | Origen | Descripción |
+|---|---|---|
+| `captaciones_mutualistas` | Archivos `*_Mut*.xlsm` | Captaciones de asociaciones mutualistas |
+| `captaciones_sectores` | Archivos `*_S1/S2/S3*.xlsm` | Captaciones por segmento de cooperativas, columna `sector` (1/2/3) |
+| `captaciones_bruto` | TXT de cada ZIP de bases | Base granular: tipo persona, parroquia, banda maduración, sexo, rango edad, nivel instrucción |
+
+**Notas:**
+- Detecta dinámicamente la URL del año actual en cada ejecución (la SEPS puede cambiar el `download_id`).
+- Cambios en archivos históricos detectados via ETag; si coincide, se omite la descarga.
+- ZIP "años anteriores" cubre 2015–2019 (reportes) y pre-2018 (bases).
+- Deduplicación por hash SHA-256 (reportes) y fecha de corte mensual (bases).
 
 ---
 

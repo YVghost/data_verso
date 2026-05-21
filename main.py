@@ -17,6 +17,8 @@ Orden de ejecucion:
   10. recaudacion_mensual            SRI CSVs anuales (2017-presente)
   11. mutualistas                    SEPS ZIPs anuales — captaciones (3 tablas)
                                       + colocaciones (8 tablas), 2017-presente
+  12. pib_nominal_industria          BCE Excel trimestrales — VAB por industrias
+                                      (2 tablas: bruto + ajustado, 2023-presente)
 
 Uso:
   python main.py                              # todos los modulos
@@ -49,6 +51,7 @@ _MODULES = [
     ("captaciones_financiero_privado", {}),
     ("recaudacion_mensual",           {}),
     ("mutualistas",                   {}),
+    ("pib_nominal_industria",         {}),
 ]
 
 

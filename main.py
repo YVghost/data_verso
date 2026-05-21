@@ -19,6 +19,8 @@ Orden de ejecucion:
                                       + colocaciones (8 tablas), 2017-presente
   12. pib_nominal_industria          BCE Excel trimestrales — VAB por industrias
                                       (2 tablas: bruto + ajustado, 2023-presente)
+  13. ventas_actividad_economica_sri SRI Saiku — 6 tablas por declaracion/metrica
+                                      (101/103/104 CIIU, 2020-presente, carga manual XLS)
 
 Uso:
   python main.py                              # todos los modulos
@@ -52,6 +54,7 @@ _MODULES = [
     ("recaudacion_mensual",           {}),
     ("mutualistas",                   {}),
     ("pib_nominal_industria",         {}),
+    ("ventas_actividad_economica_sri", {}),
 ]
 
 

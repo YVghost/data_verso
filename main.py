@@ -8,19 +8,20 @@ Orden de ejecucion:
   1.  riesgo_pais                    JSON directo BCE   (sin Playwright)
   2.  pib_per_capita_nominal         BCE Excel
   3.  tipo_de_cambio                 BCE Excel
-  4.  reservas_internacionales       BCE Excel
+  4.  reservas_internacionales       BCE Excel + Playwright
   5.  depositos_gobierno_bce         BCE XLS/XLSX semanales (2012-presente)
   6.  inflacion_ecuador              INEC ZIP mensual
-  7.  empleo                         INEC CSVs trimestrales + mensuales
-  8.  captaciones_financiero_publico Superbancos ZIPs anuales
-  9.  captaciones_financiero_privado Superbancos ZIPs anuales
+  7.  empleo                         INEC CSVs trimestrales + mensuales (Playwright)
+  8.  captaciones_financiero_publico Superbancos ZIPs anuales (Playwright)
+  9.  captaciones_financiero_privado Superbancos ZIPs anuales (Playwright)
   10. recaudacion_mensual            SRI CSVs anuales (2017-presente)
   11. mutualistas                    SEPS ZIPs anuales — captaciones (3 tablas)
                                       + colocaciones (8 tablas), 2017-presente
   12. pib_nominal_industria          BCE Excel trimestrales — VAB por industrias
                                       (2 tablas: bruto + ajustado, 2023-presente)
-  13. ventas_actividad_economica_sri SRI Saiku — 6 tablas por declaracion/metrica
-                                      (101/103/104 CIIU, 2020-presente, carga manual XLS)
+  13. ventas_actividad_economica_sri SRI Saiku REST API — 6 tablas por
+                                      declaracion/metrica (101/103/104 CIIU,
+                                      2020-presente, descarga automatica)
 
 Uso:
   python main.py                              # todos los modulos

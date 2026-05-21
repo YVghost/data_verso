@@ -47,6 +47,9 @@ downloads/
 Thumbs.db
 Desktop.ini
 
+# ── Exportaciones locales ────────────────────────────────────────────────────
+exported_data/
+
 # ── Excel temporales ─────────────────────────────────────────────────────────
 ~$*.xls*
 

@@ -28,6 +28,9 @@ Orden de ejecucion:
                                       datos desde 2000.I)
   15. supercias_utilidad             Supercias ranking anual empresas Ecuador
                                       (1 tabla, 2010-presente, ~100-150k filas/año)
+  16. imaec                          BCE IMAEc mensual — Índice de Actividad
+                                      Económica Coyuntural (2 tablas: bruto +
+                                      ajustado, 10 hojas, datos desde 2018.ene)
 
 Uso:
   python main.py                              # todos los modulos
@@ -64,6 +67,7 @@ _MODULES = [
     ("ventas_actividad_economica_sri", {}),
     ("pib_nominal_oferta",            {}),
     ("supercias_utilidad",            {}),
+    ("imaec",                         {}),
 ]
 
 

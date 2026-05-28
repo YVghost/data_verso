@@ -26,6 +26,8 @@ Orden de ejecucion:
                                       de Bienes y Servicios (2 tablas: bruto +
                                       ajustado, ediciones 2023-presente,
                                       datos desde 2000.I)
+  15. supercias_utilidad             Supercias ranking anual empresas Ecuador
+                                      (1 tabla, 2010-presente, ~100-150k filas/año)
 
 Uso:
   python main.py                              # todos los modulos
@@ -61,6 +63,7 @@ _MODULES = [
     ("pib_nominal_industria",         {}),
     ("ventas_actividad_economica_sri", {}),
     ("pib_nominal_oferta",            {}),
+    ("supercias_utilidad",            {}),
 ]
 
 

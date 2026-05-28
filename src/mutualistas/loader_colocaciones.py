@@ -602,7 +602,7 @@ def _load_bruto_zip(zip_path: Path, table: str, row_parser,
         return 0
 
     _XLSM_EXTS = {".xlsm", ".xlsx"}
-    _CSV_EXTS  = {".txt", ".csv"}
+    _CSV_EXTS  = {".txt", ".csv", ".dat"}   # .dat = Deflate64 col_bruto 2017-2021
     total_new  = 0
 
     for fname in zf.namelist():
@@ -611,6 +611,11 @@ def _load_bruto_zip(zip_path: Path, table: str, row_parser,
         if ext in _XLSM_EXTS:
             total_new += _process_bruto_xlsm(
                 zf, fname, table, row_parser, engine, existing, xlsm_sheets)
+            continue
+
+        if ext == ".rar":
+            print(f"[colocaciones] {fname}: formato RAR no soportado — omitido. "
+                  f"Descomprimir manualmente y volver a ejecutar con --etl-only.")
             continue
 
         if ext not in _CSV_EXTS:
@@ -978,78 +983,147 @@ def _parse_col_row(header: list, row: tuple,
 # ---------------------------------------------------------------------------
 
 def _parse_vol_bruto_row(row: pd.Series) -> dict | None:
+    # Dos formatos:
+    #   Formato A (2018-2021, anterior): separador ';', columnas sin espacios
+    #     FECHADECORTE, TIPOOPERACION, CODIGOACTIVIDADECONOMICA ...
+    #   Formato B (2022+): separador '\t', columnas con espacios
+    #     FECHA DE CORTE, TIPO OPERACION, CODIGO ACTIVIDAD ECONOMICA ...
     fecha_corte = _to_date(_sq(row.get("FECHA DE CORTE") or row.get("FECHADECORTE")))
     if fecha_corte is None:
         return None
     return {
-        "anio":               int(fecha_corte[:4]),
-        "tipo_operacion":     _sq(row.get("TIPO OPERACION")),
-        "estado_operacion":   _sq(row.get("ESTADO OPERACION")),
-        "segmento":           _sq(row.get("SEGMENTO")),
-        "cod_actividad_eco":  _sq(row.get("CODIGO ACTIVIDAD ECONOMICA")),
-        "acteco_seccion":     _sq(row.get("ACTIVIDAD ECONOMICA SECCION")),
-        "acteco_division":    _sq(row.get("ACTIVIDAD ECONOMICA DIVISION")),
-        "acteco_grupo":       _sq(row.get("ACTIVIDAD ECONOMICA GRUPO")),
-        "acteco_clase":       _sq(row.get("ACTIVIDAD ECONOMICA CLASE")),
-        "acteco_subclase":    _sq(row.get("ACTIVIDAD ECONOMICA SUBCLASE")),
-        "actividad_economica": _sq(row.get("ACTIVIDAD ECONOMICA")),
-        "canton":             _sq(row.get("CANTON")),
-        "cod_dpa":            _sq(row.get("CODIG DPA") or row.get("CODIGO DPA")),
-        "parroquia":          _sq(row.get("PARROQUIA")),
-        "provincia":          _sq(row.get("PROVINCIA")),
-        "fecha_corte":        fecha_corte,
-        "tipo_credito_general": _sq(row.get("TIPO CREDITO GENERAL")),
-        "instruccion":        _sq(row.get("INSTRUCCION")),
-        "sexo":               _sq(row.get("SEXO")),
-        "destino_financiero": _sq(row.get("DESTINO FINANCIERO")),
-        "rango_edad":         _sq(row.get("RANGO EDAD")),
-        "rango_monto_credito": _sq(row.get("RANGO MONTO CREDITO CONCEDIDO")),
-        "rango_plazo_original": _sq(row.get("RANGO PLAZO ORIGINAL CONCESION")),
-        "tipo_persona":       _sq(row.get("TIPO PERSONA")),
-        "tipo_credito_espec": _sq(row.get("TIPO DE CREDITO") or row.get("TIPO DE CRDITO")),
-        "nro_sujetos_credito": _to_int(row.get("NRO SUJETOS CREDITO")),
-        "nro_operaciones":    _to_int(row.get("NRO OPERACIONES")),
-        "monto_concedido_usd": _to_float(row.get("MONTO CONCEDIDO USD")),
+        "anio":  int(fecha_corte[:4]),
+        "tipo_operacion": _sq(
+            row.get("TIPO OPERACION") or row.get("TIPOOPERACION")),
+        "estado_operacion": _sq(
+            row.get("ESTADO OPERACION") or row.get("ESTADOOPERACION")),
+        "segmento": _sq(row.get("SEGMENTO")),
+        "cod_actividad_eco": _sq(
+            row.get("CODIGO ACTIVIDAD ECONOMICA") or row.get("CODIGOACTIVIDADECONOMICA")),
+        "acteco_seccion": _sq(
+            row.get("ACTIVIDAD ECONOMICA SECCION") or row.get("ACTIVIDADECONOMICASECCION")),
+        "acteco_division": _sq(
+            row.get("ACTIVIDAD ECONOMICA DIVISION") or row.get("ACTIVIDADECONOMICADIVISION")),
+        "acteco_grupo": _sq(
+            row.get("ACTIVIDAD ECONOMICA GRUPO") or row.get("ACTIVIDADECONOMICAGRUPO")),
+        "acteco_clase": _sq(
+            row.get("ACTIVIDAD ECONOMICA CLASE") or row.get("ACTIVIDADECONOMICACLASE")),
+        "acteco_subclase": _sq(
+            row.get("ACTIVIDAD ECONOMICA SUBCLASE") or row.get("ACTIVIDADECONOMICASUBCLASE")),
+        "actividad_economica": _sq(
+            row.get("ACTIVIDAD ECONOMICA") or row.get("ACTIVIDADECONOMICA")),
+        "canton": _sq(row.get("CANTON")),
+        "cod_dpa": _sq(
+            row.get("CODIG DPA") or row.get("CODIGO DPA") or row.get("CODIGODPA")),
+        "parroquia": _sq(row.get("PARROQUIA")),
+        "provincia": _sq(row.get("PROVINCIA")),
+        "fecha_corte": fecha_corte,
+        "tipo_credito_general": _sq(
+            row.get("TIPO CREDITO GENERAL") or row.get("TIPOCREDITOGENERAL")),
+        "instruccion": _sq(row.get("INSTRUCCION")),
+        "sexo": _sq(row.get("SEXO")),
+        "destino_financiero": _sq(
+            row.get("DESTINO FINANCIERO") or row.get("DESTINOFINANCIERO")),
+        "rango_edad": _sq(row.get("RANGO EDAD") or row.get("RANGOEDAD")),
+        "rango_monto_credito": _sq(
+            row.get("RANGO MONTO CREDITO CONCEDIDO") or row.get("RANGOMONTOCREDITOCONCEDIDO")),
+        "rango_plazo_original": _sq(
+            row.get("RANGO PLAZO ORIGINAL CONCESION")
+            or row.get("RANGOPLAZOORIGINALCONCESION")
+            or row.get("RANGOPLAZOORIGINALCONC")),
+        "tipo_persona": _sq(
+            row.get("TIPO PERSONA") or row.get("TIPOPERSONA")),
+        "tipo_credito_espec": _sq(
+            row.get("TIPO DE CREDITO") or row.get("TIPO DE CRDITO")
+            or row.get("TIPODECREDITO") or row.get("TIPODECR DITO")),
+        # NRO.SUJETOSCREDITO (fmt A) → norm → "NRO SUJETOSCREDITO"
+        "nro_sujetos_credito": _to_int(
+            row.get("NRO SUJETOS CREDITO") or row.get("NRO SUJETOSCREDITO")
+            or row.get("NRO. SUJETOS CREDITO")),
+        "nro_operaciones": _to_int(
+            row.get("NRO OPERACIONES") or row.get("NROOPERACIONES")
+            or row.get("NRO. OPERACIONES")),
+        "monto_concedido_usd": _to_float(
+            row.get("MONTO CONCEDIDO USD") or row.get("MONTOCONCEDIDOUSD")),
     }
 
 
 def _parse_col_bruto_row(row: pd.Series) -> dict | None:
+    # Dos formatos:
+    #   Formato A (dat 2017-2021): separador '\t' o ';', columnas sin espacios
+    #     FECHADECORTE, SEGMENTO, TIPOOPERACION ...
+    #   Formato B (txt 2022+): separador '\t', columnas con espacios
+    #     FECHA DE CORTE, SEGMENTO, TIPO OPERACION (C02) ...
+    # Nota Formato B: las columnas de valor NO llevan "USD" al final
+    #   VALOR POR VENCER (no VALOR POR VENCER USD)
+    #   VALOR VENCIDO (USD) -> norm -> VALOR VENCIDO USD
+    #   VALOR SALDO TOTAL (USD) -> norm -> VALOR SALDO TOTAL USD
     fecha_corte = _to_date(_sq(row.get("FECHA DE CORTE") or row.get("FECHADECORTE")))
     if fecha_corte is None:
         return None
     return {
-        "anio":               int(fecha_corte[:4]),
-        "fecha_corte":        fecha_corte,
-        "segmento":           _sq(row.get("SEGMENTO")),
-        "tipo_operacion":     _sq(row.get("TIPO OPERACION C02")
-                                  or row.get("TIPO OPERACION")),
-        "tipo_credito_general": _sq(row.get("TIPO CREDITO GENERAL")),
-        "tipo_credito_espec": _sq(row.get("TIPO CREDITO ESPECIFICO")
-                                  or row.get("TIPO CREDITO ESPCIFICO")),
-        "cod_destino_fin":    _sq(row.get("CODIGO DESTINO FINANCIERO")),
-        "destino_financiero": _sq(row.get("DESTINO FINANCIERO")),
-        "cod_actividad_eco":  _sq(row.get("CODIGO ACTIVIDAD ECONOMICA")),
-        "acteco_seccion":     _sq(row.get("ACTIVIDAD ECONOMICA SECCION")),
-        "acteco_division":    _sq(row.get("ACTIVIDAD ECONOMICA DIVISION")),
-        "acteco_grupo":       _sq(row.get("ACTIVIDAD ECONOMICA GRUPO")),
-        "acteco_clase":       _sq(row.get("ACTIVIDAD ECONOMICA CLASE")),
-        "acteco_subclase":    _sq(row.get("ACTIVIDAD ECONOMICA SUBCLASE")),
-        "actividad_economica": _sq(row.get("ACTIVIDAD ECONOMICA")),
-        "provincia":          _sq(row.get("PROVINCIA")),
-        "canton":             _sq(row.get("CANTON")),
-        "parroquia":          _sq(row.get("PARROQUIA")),
-        "cod_dpa":            _sq(row.get("CODIGO DPA") or row.get("CODIG DPA")),
-        "tipo_persona":       _sq(row.get("TIPO PERSONA")),
-        "sexo":               _sq(row.get("SEXO")),
-        "rango_edad":         _sq(row.get("RANGO EDAD")),
-        "nivel_instruccion":  _sq(row.get("NIVEL INSTRUCCION")),
-        "rango_saldo":        _sq(row.get("RANGO SALDO")),
-        "nro_sujetos":        _to_int(row.get("NRO SUJETOS")),
-        "nro_operaciones":    _to_int(row.get("NRO OPERACIONES")),
-        "valor_por_vencer_usd":  _to_float(row.get("VALOR POR VENCER USD")),
-        "valor_no_devenga_usd":  _to_float(row.get("VALOR NO DEVENGA INTERESES USD")),
-        "valor_vencido_usd":     _to_float(row.get("VALOR VENCIDO USD")),
-        "valor_saldo_total_usd": _to_float(row.get("VALOR SALDO TOTAL USD")),
+        "anio":  int(fecha_corte[:4]),
+        "fecha_corte": fecha_corte,
+        "segmento": _sq(row.get("SEGMENTO")),
+        "tipo_operacion": _sq(
+            row.get("TIPO OPERACION C02") or row.get("TIPO OPERACION")
+            or row.get("TIPOOPERACION")),
+        "tipo_credito_general": _sq(
+            row.get("TIPO CREDITO GENERAL") or row.get("TIPOCREDITOGENERAL")),
+        "tipo_credito_espec": _sq(
+            row.get("TIPO CREDITO ESPECIFICO") or row.get("TIPO CREDITO ESPCIFICO")
+            or row.get("TIPOCREDITOESPECIFICO") or row.get("TIPO CREDITO ESPECFICO")),
+        "cod_destino_fin": _sq(
+            row.get("CODIGO DESTINO FINANCIERO") or row.get("CODIGODESTINO FINANCIERO")),
+        "destino_financiero": _sq(
+            row.get("DESTINO FINANCIERO") or row.get("DESTINOFINANCIERO")),
+        "cod_actividad_eco": _sq(
+            row.get("CODIGO ACTIVIDAD ECONOMICA") or row.get("CODIGOACTIVIDADECONOMICA")),
+        "acteco_seccion": _sq(
+            row.get("ACTIVIDAD ECONOMICA SECCION") or row.get("ACTIVIDADECONOMICASECCION")),
+        "acteco_division": _sq(
+            row.get("ACTIVIDAD ECONOMICA DIVISION") or row.get("ACTIVIDADECONOMICADIVISION")),
+        "acteco_grupo": _sq(
+            row.get("ACTIVIDAD ECONOMICA GRUPO") or row.get("ACTIVIDADECONOMICAGRUPO")),
+        "acteco_clase": _sq(
+            row.get("ACTIVIDAD ECONOMICA CLASE") or row.get("ACTIVIDADECONOMICACLASE")),
+        "acteco_subclase": _sq(
+            row.get("ACTIVIDAD ECONOMICA SUBCLASE") or row.get("ACTIVIDADECONOMICASUBCLASE")),
+        "actividad_economica": _sq(
+            row.get("ACTIVIDAD ECONOMICA") or row.get("ACTIVIDADECONOMICA")),
+        "provincia": _sq(row.get("PROVINCIA")),
+        "canton": _sq(row.get("CANTON")),
+        "parroquia": _sq(row.get("PARROQUIA")),
+        "cod_dpa": _sq(
+            row.get("CODIGO DPA") or row.get("CODIG DPA") or row.get("CODIGODPA")),
+        "tipo_persona": _sq(
+            row.get("TIPO PERSONA") or row.get("TIPOPERSONA")),
+        "sexo": _sq(row.get("SEXO")),
+        "rango_edad": _sq(row.get("RANGO EDAD") or row.get("RANGOEDAD")),
+        "nivel_instruccion": _sq(
+            row.get("NIVEL INSTRUCCION") or row.get("INSTRUCCION")
+            or row.get("NIVELINSTRUCCION")),
+        "rango_saldo": _sq(row.get("RANGO SALDO") or row.get("RANGOSALDO")),
+        "nro_sujetos": _to_int(
+            row.get("NRO SUJETOS") or row.get("NROSUJETOS")
+            or row.get("NRO. SUJETOS")),
+        "nro_operaciones": _to_int(
+            row.get("NRO OPERACIONES") or row.get("NROOPERACIONES")
+            or row.get("NRO. OPERACIONES")),
+        # Formato B: "VALOR POR VENCER" (sin USD); formato A puede traer "VALOR POR VENCER USD"
+        "valor_por_vencer_usd": _to_float(
+            row.get("VALOR POR VENCER USD") or row.get("VALOR POR VENCER")
+            or row.get("VALORPORVENCER")),
+        # VALOR NO DEVENGA INTERESES (USD) -> norm -> VALOR NO DEVENGA INTERESES USD
+        "valor_no_devenga_usd": _to_float(
+            row.get("VALOR NO DEVENGA INTERESES USD")
+            or row.get("VALOR NO DEVENGA INTERESES")),
+        # VALOR VENCIDO (USD) -> norm -> VALOR VENCIDO USD
+        "valor_vencido_usd": _to_float(
+            row.get("VALOR VENCIDO USD") or row.get("VALOR VENCIDO")),
+        # VALOR SALDO TOTAL (USD) -> norm -> VALOR SALDO TOTAL USD
+        "valor_saldo_total_usd": _to_float(
+            row.get("VALOR SALDO TOTAL USD") or row.get("VALOR SALDO TOTAL")),
     }
 
 

@@ -15,12 +15,30 @@ Tablas      :
 
 Modos de ejecucion
 ------------------
-    python main.py                  # descarga + ETL completo (2017 al año actual)
-    python main.py --download-only  # solo descarga ZIPs
-    python main.py --etl-only       # ETL sobre ZIPs ya en disco
-    python main.py --start 2022     # desde 2022
-    python main.py --captaciones    # solo captaciones
-    python main.py --colocaciones   # solo colocaciones
+    python main.py                       # descarga + ETL completo (2017 al año actual)
+    python main.py --download-only       # solo descarga ZIPs
+    python main.py --etl-only            # ETL sobre ZIPs ya descargados
+    python main.py --start 2022          # desde 2022
+    python main.py --captaciones         # solo captaciones
+    python main.py --colocaciones        # solo colocaciones
+
+Seleccion de tipos de colocaciones (--tipos-col)
+-------------------------------------------------
+Tipos disponibles: volumen  colocaciones  volumen_bruto  col_bruto  tarjetas
+
+    python main.py --colocaciones --tipos-col volumen_bruto
+    python main.py --colocaciones --tipos-col col_bruto volumen_bruto
+    python main.py --etl-only --colocaciones --tipos-col col_bruto
+
+Mapeo tipo → tablas BD:
+  volumen       → mutualistas_colocaciones_volumen_credito
+                  mutualistas_colocaciones_volumen_credito_sectores
+  colocaciones  → mutualistas_colocaciones
+                  mutualistas_colocaciones_sectores
+  volumen_bruto → mutualistas_colocaciones_volumen_credito_bruto
+  col_bruto     → mutualistas_colocaciones_mensual_bruto
+  tarjetas      → mutualistas_colocaciones_tarjetas_con_forma_pago
+                  mutualistas_colocaciones_tarjetas_sin_forma_pago
 """
 
 import argparse
@@ -38,6 +56,17 @@ import loader_colocaciones as loader_col
 REPORTES_DIR = bot.REPORTES_DIR
 BASES_DIR    = bot.BASES_DIR
 
+# Tipos de colocaciones disponibles
+_TIPOS_COL_ALL = ["volumen", "colocaciones", "volumen_bruto", "col_bruto", "tarjetas"]
+
+_COL_DIRS = {
+    "volumen":       bot_col.VOLUMEN_DIR,
+    "colocaciones":  bot_col.COLOCACIONES_DIR,
+    "volumen_bruto": bot_col.VOLUMEN_BRUTO_DIR,
+    "col_bruto":     bot_col.COL_BRUTO_DIR,
+    "tarjetas":      bot_col.TARJETAS_DIR,
+}
+
 
 def run(
     download_only: bool = False,
@@ -45,9 +74,27 @@ def run(
     start_year: int = bot.FIRST_YEAR,
     only_captaciones: bool = False,
     only_colocaciones: bool = False,
+    tipos_col: list[str] | None = None,
 ) -> None:
+    """
+    tipos_col: subconjunto de tipos de colocaciones a procesar.
+               None = todos. Opciones: volumen, colocaciones,
+               volumen_bruto, col_bruto, tarjetas.
+    """
     run_cap = not only_colocaciones
     run_col = not only_captaciones
+
+    # Validar y resolver tipos de colocaciones a procesar
+    tipos_activos = _TIPOS_COL_ALL
+    if tipos_col:
+        invalidos = [t for t in tipos_col if t not in _TIPOS_COL_ALL]
+        if invalidos:
+            print(f"[mutualistas] Tipos desconocidos en --tipos-col: {invalidos}")
+            print(f"[mutualistas] Valores validos: {_TIPOS_COL_ALL}")
+        tipos_activos = [t for t in tipos_col if t in _TIPOS_COL_ALL]
+        if not tipos_activos:
+            print("[mutualistas] Ningún tipo válido seleccionado.")
+            run_col = False
 
     # ------------------------------------------------------------------ #
     # Captaciones                                                          #
@@ -72,24 +119,21 @@ def run(
     # ------------------------------------------------------------------ #
     if run_col:
         if not etl_only:
+            # Descargar solo los tipos activos
             files_col = bot_col.fetch(start_year=start_year)
         else:
-            col_dirs = {
-                "volumen":       bot_col.VOLUMEN_DIR,
-                "colocaciones":  bot_col.COLOCACIONES_DIR,
-                "volumen_bruto": bot_col.VOLUMEN_BRUTO_DIR,
-                "col_bruto":     bot_col.COL_BRUTO_DIR,
-                "tarjetas":      bot_col.TARJETAS_DIR,
-            }
-            files_col = {k: sorted(d.glob("*.zip"))
-                         for k, d in col_dirs.items()}
+            files_col = {k: sorted(_COL_DIRS[k].glob("*.zip"))
+                         for k in tipos_activos}
             if not any(files_col.values()):
                 print("[mutualistas] Sin ZIPs de colocaciones en disco para ETL.")
                 files_col = None
 
         if not download_only and files_col:
-            files_col["min_year"] = start_year
-            loader_col.load(files_col)
+            # Filtrar tipos no seleccionados antes de pasar al loader
+            files_col_filtrado = {k: v for k, v in files_col.items()
+                                  if k in tipos_activos}
+            files_col_filtrado["min_year"] = start_year
+            loader_col.load(files_col_filtrado)
 
 
 if __name__ == "__main__":
@@ -106,6 +150,15 @@ if __name__ == "__main__":
                     help="Ejecutar solo el flujo de captaciones")
     ap.add_argument("--colocaciones", action="store_true",
                     help="Ejecutar solo el flujo de colocaciones")
+    ap.add_argument(
+        "--tipos-col", nargs="+", metavar="TIPO",
+        choices=_TIPOS_COL_ALL,
+        help=(
+            "Tipos de colocaciones a procesar (opcional). "
+            f"Opciones: {', '.join(_TIPOS_COL_ALL)}. "
+            "Ejemplo: --tipos-col col_bruto volumen_bruto"
+        ),
+    )
     args = ap.parse_args()
 
     if args.download_only and args.etl_only:
@@ -119,4 +172,5 @@ if __name__ == "__main__":
         start_year=args.start,
         only_captaciones=args.captaciones,
         only_colocaciones=args.colocaciones,
+        tipos_col=args.tipos_col,
     )

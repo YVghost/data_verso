@@ -22,6 +22,10 @@ Orden de ejecucion:
   13. ventas_actividad_economica_sri SRI Saiku REST API — 6 tablas por
                                       declaracion/metrica (101/103/104 CIIU,
                                       2020-presente, descarga automatica)
+  14. pib_nominal_oferta             BCE Excel trimestrales — Oferta y Utilizacion
+                                      de Bienes y Servicios (2 tablas: bruto +
+                                      ajustado, ediciones 2023-presente,
+                                      datos desde 2000.I)
 
 Uso:
   python main.py                              # todos los modulos
@@ -56,6 +60,7 @@ _MODULES = [
     ("mutualistas",                   {}),
     ("pib_nominal_industria",         {}),
     ("ventas_actividad_economica_sri", {}),
+    ("pib_nominal_oferta",            {}),
 ]
 
 

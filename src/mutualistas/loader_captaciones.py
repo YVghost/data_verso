@@ -6,17 +6,20 @@ Tablas:
   mutualistas_captaciones_sectores — reportes S1/S2/S3 + columna sector
   mutualistas_captaciones_bruto    — bases granulares (xlsm/xlsx/txt/csv)
 
-Formatos aceptados en cada ZIP:
-  .xlsm / .xlsx  — openpyxl; hoja detectada automaticamente
-  .txt  / .csv   — pandas read_csv; encoding y separador auto-detectados
-  ZIPs anidados  — anterior.zip contiene 2016.zip, 2017.zip, etc.
+Cada ZIP se extrae primero a disco (downloads/.../extracted/{nombre}/)
+y luego se procesan los archivos extraídos.  Los archivos ya extraídos
+no se vuelven a extraer en ejecuciones posteriores.
+
+ZIPs anidados (anterior.zip) se extraen en dos pasadas:
+  1. anterior.zip → extracted/anterior/
+  2. 2016.zip, 2017.zip … dentro → extracted/anterior/2016/ etc.
 
 Deduplicacion: hash SHA-256 por registro. Re-ejecutar es idempotente.
 """
 
 import hashlib
-import io
 import re
+import shutil
 import sys
 import unicodedata
 import zipfile
@@ -183,6 +186,55 @@ def _get_existing_hashes(engine, table: str) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
+# Extracción a disco
+# ---------------------------------------------------------------------------
+
+def _ensure_extracted(zip_path: Path) -> Path:
+    """
+    Extrae zip_path a <parent>/extracted/<stem>/.
+    Si el directorio ya existe con contenido, no re-extrae.
+    Si el ZIP fue re-descargado (más reciente que el dir), re-extrae.
+    """
+    out = zip_path.parent / "extracted" / zip_path.stem
+    if out.exists() and any(out.rglob("*")):
+        # Re-extraer solo si el ZIP es más nuevo que la extracción
+        if zip_path.stat().st_mtime <= out.stat().st_mtime:
+            return out
+        shutil.rmtree(out)
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"[mutualistas] Extrayendo {zip_path.name}...")
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(out)
+        count = sum(1 for p in out.rglob("*") if p.is_file())
+        print(f"[mutualistas] {zip_path.name}: {count} archivos extraídos.")
+    except Exception as ex:
+        print(f"[mutualistas] Error extrayendo {zip_path.name}: {ex}")
+    return out
+
+
+def _extract_nested_zips(outer_dir: Path, min_year: int) -> None:
+    """Extrae los ZIPs anuales dentro de un directorio (ej: anterior/)."""
+    for inner_zip in sorted(outer_dir.glob("**/*.zip")):
+        m = re.match(r"^(\d{4})\.zip$", inner_zip.name)
+        if not m:
+            continue
+        year = int(m.group(1))
+        if year < min_year:
+            continue
+        inner_out = inner_zip.parent / inner_zip.stem
+        if inner_out.exists() and any(inner_out.rglob("*")):
+            continue
+        inner_out.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(inner_zip) as zf:
+                zf.extractall(inner_out)
+            print(f"[mutualistas] {inner_zip.name}: extraído en {inner_out.name}/")
+        except Exception as ex:
+            print(f"[mutualistas] Error extrayendo {inner_zip.name}: {ex}")
+
+
+# ---------------------------------------------------------------------------
 # Carga de reportes (ZIP con xlsm)
 # ---------------------------------------------------------------------------
 
@@ -190,27 +242,25 @@ def _load_reportes_zip(zip_path: Path, engine,
                        existing_mut: set, existing_sec: set,
                        min_year: int = 2017) -> tuple[int, int]:
     print(f"[mutualistas] Reportes: {zip_path.name}")
+    extract_dir = _ensure_extracted(zip_path)
     new_mut = new_sec = 0
-    try:
-        zf = zipfile.ZipFile(zip_path)
-    except Exception as ex:
-        print(f"[mutualistas] Error abriendo {zip_path.name}: {ex}")
-        return 0, 0
 
     _XLSM = {".xlsm", ".xlsx", ".xltm"}
     _CSV  = {".txt", ".csv"}
 
-    for fname in zf.namelist():
-        basename = fname.split("/")[-1]
-        ext = Path(basename).suffix.lower()
-
+    for fpath in sorted(extract_dir.rglob("*")):
+        if not fpath.is_file():
+            continue
+        ext = fpath.suffix.lower()
         if ext not in _XLSM and ext not in _CSV:
             continue
 
-        dir_year = _year_from_zippath(fname)
+        # Filtrar por año de directorio padre si aplica
+        dir_year = _year_from_dirpath(fpath, extract_dir)
         if dir_year is not None and dir_year < min_year:
             continue
 
+        basename = fpath.name
         if not _is_captaciones_file(basename):
             continue
 
@@ -224,11 +274,7 @@ def _load_reportes_zip(zip_path: Path, engine,
 
         if ext in _XLSM:
             try:
-                data = zf.read(fname)
-                wb   = openpyxl.load_workbook(io.BytesIO(data), read_only=True,
-                                              data_only=True)
-                # Buscar hoja: preferir "Base_captaciones", luego cualquiera
-                # con "base" o "cap", luego la primera hoja disponible
+                wb = openpyxl.load_workbook(fpath, read_only=True, data_only=True)
                 _pref = [s for s in wb.sheetnames if s == "Base_captaciones"]
                 _pref = _pref or [s for s in wb.sheetnames
                                   if "base" in s.lower() or "cap" in s.lower()]
@@ -240,7 +286,7 @@ def _load_reportes_zip(zip_path: Path, engine,
                 rows = list(ws.iter_rows(values_only=True))
                 wb.close()
             except Exception as ex:
-                print(f"[mutualistas] Error leyendo {fname}: {ex}")
+                print(f"[mutualistas] Error leyendo {basename}: {ex}")
                 continue
 
             if not rows or len(rows) < 2:
@@ -264,96 +310,49 @@ def _load_reportes_zip(zip_path: Path, engine,
                     new_mut += len(records)
                 else:
                     new_sec += len(records)
-                print(f"[mutualistas] {fname}: {len(records):,} filas nuevas -> {tbl}")
+                print(f"[mutualistas] {basename}: {len(records):,} filas nuevas -> {tbl}")
             else:
-                print(f"[mutualistas] {fname}: sin filas nuevas.")
+                print(f"[mutualistas] {basename}: sin filas nuevas.")
 
         else:  # TXT / CSV
             try:
-                with zf.open(fname) as f:
-                    header_bytes = f.read(4096)
-                enc = _detect_enc(header_bytes)
-                sep = _detect_sep_bytes(header_bytes, enc)
+                enc = _detect_enc(fpath.read_bytes()[:4096])
+                sep = _detect_sep_bytes(fpath.read_bytes()[:4096], enc)
                 inserted = 0
-                with zf.open(fname) as f:
-                    reader = pd.read_csv(
-                        f, sep=sep, encoding=enc, dtype=str,
-                        chunksize=_CHUNKSIZE, on_bad_lines="skip",
-                        low_memory=False,
-                    )
-                    for chunk in reader:
-                        header  = [_norm_col(c) for c in chunk.columns]
-                        records = []
-                        for _, df_row in chunk.iterrows():
-                            rec = _parse_reportes_row(
-                                header, tuple(df_row.values), sector, is_mut)
-                            if rec is None:
-                                continue
-                            h = _hash_rec(rec)
-                            rec["hash_registro"] = h
-                            if h not in existing:
-                                records.append(rec)
-                                existing.add(h)
-                        if records:
-                            _insert(records, tbl, engine)
-                            inserted += len(records)
-                            if is_mut:
-                                new_mut += len(records)
-                            else:
-                                new_sec += len(records)
+                reader = pd.read_csv(
+                    fpath, sep=sep, encoding=enc, dtype=str,
+                    chunksize=_CHUNKSIZE, on_bad_lines="skip", low_memory=False,
+                )
+                for chunk in reader:
+                    header  = [_norm_col(c) for c in chunk.columns]
+                    records = []
+                    for _, df_row in chunk.iterrows():
+                        rec = _parse_reportes_row(
+                            header, tuple(df_row.values), sector, is_mut)
+                        if rec is None:
+                            continue
+                        h = _hash_rec(rec)
+                        rec["hash_registro"] = h
+                        if h not in existing:
+                            records.append(rec)
+                            existing.add(h)
+                    if records:
+                        _insert(records, tbl, engine)
+                        inserted += len(records)
+                        if is_mut:
+                            new_mut += len(records)
+                        else:
+                            new_sec += len(records)
             except Exception as ex:
-                print(f"[mutualistas] Error procesando {fname}: {ex}")
+                print(f"[mutualistas] Error procesando {basename}: {ex}")
                 continue
 
             if inserted:
-                print(f"[mutualistas] {fname}: {inserted:,} filas nuevas -> {tbl}")
+                print(f"[mutualistas] {basename}: {inserted:,} filas nuevas -> {tbl}")
             else:
-                print(f"[mutualistas] {fname}: sin filas nuevas.")
+                print(f"[mutualistas] {basename}: sin filas nuevas.")
 
     return new_mut, new_sec
-
-
-def _detect_sector(fname: str) -> int | None:
-    """Extrae numero de sector de nombre como S1, S2, S3."""
-    m = re.search(r"[_\-]S(\d)[_\-\.]", fname, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
-    # Variacion: "S1" al inicio/fin sin delimitador claro
-    m = re.search(r"S([123])", fname, re.IGNORECASE)
-    return int(m.group(1)) if m else None
-
-
-def _is_mutualista(fname: str) -> bool:
-    return bool(re.search(r"Mut", fname, re.IGNORECASE))
-
-
-def _parse_reportes_row(header: list[str], row: tuple,
-                        sector: int | None, is_mut: bool) -> dict | None:
-    d = dict(zip(header, row))
-
-    fecha_corte = _to_date(d.get("FECHA DE CORTE") or d.get("FECHADECORTE"))
-    if fecha_corte is None:
-        return None
-
-    rec = {
-        "anio":             int(fecha_corte[:4]),
-        "saldo":            _to_float(d.get("SALDO")),
-        "num_clientes":     _to_int(d.get("NUMERO DE CLIENTES") or d.get("NUMERODECLIENTES")),
-        "num_cuentas":      _to_int(d.get("NUMERO DE CUENTAS") or d.get("NUMERODECUENTAS")),
-        "fecha_corte":      fecha_corte,
-        "region":           _clean(d.get("REGION")),
-        "provincia":        _clean(d.get("PROVINCIA")),
-        "canton":           _clean(d.get("CANTON")),
-        "tipo_deposito":    _clean(d.get("TIPO DE DEPOSITO") or d.get("TIPODEDEPOSITO")),
-        "estado_operacion": _clean(d.get("ESTADO OPERACION")
-                                   or d.get("ESTADO OPERACIÓN")
-                                   or d.get("ESTADOOPERACION")),
-        "ruc":              _clean(d.get("RUC")),
-        "razon_social":     _clean(d.get("RAZON SOCIAL") or d.get("RAZONSOCIAL")),
-    }
-    if not is_mut:
-        rec["sector"] = sector
-    return rec
 
 
 # ---------------------------------------------------------------------------
@@ -362,69 +361,37 @@ def _parse_reportes_row(header: list[str], row: tuple,
 
 def _load_bases_zip(zip_path: Path, engine, existing: set,
                     min_year: int = 2017) -> int:
-    """
-    Procesa un ZIP de bases. Maneja tres casos:
-      1. Archivos TXT/CSV directos (2018-2025)
-      2. ZIPs anidados (anterior.zip contiene 2016.zip, 2017.zip, ...)
-      3. Archivos grandes (1+ GB): streaming con zf.open() en chunks
-    """
     print(f"[mutualistas] Bases: {zip_path.name}")
-    try:
-        zf = zipfile.ZipFile(zip_path)
-    except Exception as ex:
-        print(f"[mutualistas] Error abriendo {zip_path.name}: {ex}")
-        return 0
+    extract_dir = _ensure_extracted(zip_path)
+
+    # Extraer ZIPs anuales anidados (caso anterior.zip)
+    _extract_nested_zips(extract_dir, min_year)
 
     total_new  = 0
-    data_exts  = {".txt", ".csv"}
-    xlsm_exts  = {".xlsm", ".xlsx"}
     found_data = False
 
-    for fname in zf.namelist():
-        basename = fname.split("/")[-1]
-        ext      = Path(basename).suffix.lower()
+    for fpath in sorted(extract_dir.rglob("*")):
+        if not fpath.is_file():
+            continue
+        ext = fpath.suffix.lower()
 
-        # --- Caso: ZIP anidado (ej: "Anos-anteriores-CAP-Men/2016.zip") ---
+        # Saltar ZIPs (ya se extrajeron en _extract_nested_zips)
         if ext == ".zip":
-            m = re.match(r"^(\d{4})\.zip$", basename)
-            if not m:
-                continue
-            inner_year = int(m.group(1))
-            if inner_year < min_year:
-                print(f"[mutualistas] {basename}: año {inner_year} < {min_year}, omitiendo.")
-                continue
-            try:
-                inner_bytes = zf.read(fname)
-                inner_zf    = zipfile.ZipFile(io.BytesIO(inner_bytes))
-                n = _process_bases_inner_zip(inner_zf, engine, existing)
-                inner_zf.close()
-                total_new += n
-                found_data = True
-            except Exception as ex:
-                print(f"[mutualistas] Error en ZIP anidado {fname}: {ex}")
             continue
 
-        # Filtrar por año si hay prefijo de directorio
-        dir_year = _year_from_zippath(fname)
+        if ext not in {".xlsm", ".xlsx", ".txt", ".csv"}:
+            continue
+
+        # Filtrar por año de directorio si aplica
+        dir_year = _year_from_dirpath(fpath, extract_dir)
         if dir_year is not None and dir_year < min_year:
             continue
 
-        # --- Caso: archivo XLSM/XLSX ---
-        if ext in xlsm_exts:
-            n = _process_bases_xlsm(zf, fname, engine, existing)
-            total_new += n
-            found_data = True
-            continue
-
-        # --- Caso: archivo de datos TXT/CSV ---
-        if ext not in data_exts:
-            continue
-
-        n = _process_bases_stream(zf, fname, engine, existing)
-        total_new += n
         found_data = True
-
-    zf.close()
+        if ext in {".xlsm", ".xlsx"}:
+            total_new += _process_bases_xlsm(fpath, engine, existing)
+        else:
+            total_new += _process_bases_stream(fpath, engine, existing)
 
     if not found_data:
         print(f"[mutualistas] {zip_path.name}: sin archivos de datos reconocidos.")
@@ -432,28 +399,12 @@ def _load_bases_zip(zip_path: Path, engine, existing: set,
     return total_new
 
 
-def _process_bases_inner_zip(inner_zf: zipfile.ZipFile,
-                              engine, existing: set) -> int:
-    """Procesa archivos de datos dentro de un ZIP anidado."""
-    total_new = 0
-    for fname in inner_zf.namelist():
-        ext = Path(fname.split("/")[-1]).suffix.lower()
-        if ext in {".xlsm", ".xlsx"}:
-            total_new += _process_bases_xlsm(inner_zf, fname, engine, existing)
-        elif ext in {".txt", ".csv"}:
-            total_new += _process_bases_stream(inner_zf, fname, engine, existing)
-    return total_new
-
-
-def _process_bases_xlsm(zf: zipfile.ZipFile, fname: str,
-                         engine, existing: set) -> int:
+def _process_bases_xlsm(fpath: Path, engine, existing: set) -> int:
     """Lee un XLSM/XLSX de bases y carga filas en mutualistas_captaciones_bruto."""
-    basename = fname.split("/")[-1]
     try:
-        data = zf.read(fname)
-        wb   = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        wb = openpyxl.load_workbook(fpath, read_only=True, data_only=True)
     except Exception as ex:
-        print(f"[mutualistas] Error abriendo XLSM {basename}: {ex}")
+        print(f"[mutualistas] Error abriendo XLSM {fpath.name}: {ex}")
         return 0
 
     candidates = [s for s in wb.sheetnames
@@ -492,79 +443,116 @@ def _process_bases_xlsm(zf: zipfile.ZipFile, fname: str,
         inserted += len(batch)
 
     if inserted:
-        print(f"[mutualistas] {basename}: {inserted:,} filas nuevas -> {_TABLE_BRUTO}")
+        print(f"[mutualistas] {fpath.name}: {inserted:,} filas nuevas -> {_TABLE_BRUTO}")
     else:
-        print(f"[mutualistas] {basename}: sin filas nuevas.")
+        print(f"[mutualistas] {fpath.name}: sin filas nuevas.")
     return inserted
 
 
-def _process_bases_stream(zf: zipfile.ZipFile, fname: str,
-                           engine, existing: set) -> int:
-    """Lee un TXT/CSV desde un ZIP en modo streaming (sin cargar todo en RAM)."""
-    basename = fname.split("/")[-1]
-
-    # Leer los primeros 4 KB para detectar encoding y separador
+def _process_bases_stream(fpath: Path, engine, existing: set) -> int:
+    """Lee un TXT/CSV desde disco (seekable) en modo streaming por chunks."""
     try:
-        with zf.open(fname) as f:
-            header_bytes = f.read(4096)
+        sample = fpath.read_bytes()[:4096]
+        enc = _detect_enc(sample)
+        sep = _detect_sep_bytes(sample, enc)
+        inserted = 0
+        reader = pd.read_csv(
+            fpath, sep=sep, encoding=enc, dtype=str,
+            chunksize=_CHUNKSIZE, on_bad_lines="skip", low_memory=False,
+        )
+        for chunk in reader:
+            chunk.columns = [_norm(c) for c in chunk.columns]
+            records = []
+            for _, row in chunk.iterrows():
+                rec = _parse_bruto_row(row)
+                if rec is None:
+                    continue
+                h = _hash_rec(rec)
+                rec["hash_registro"] = h
+                if h not in existing:
+                    records.append(rec)
+                    existing.add(h)
+            if records:
+                _insert(records, _TABLE_BRUTO, engine)
+                inserted += len(records)
     except Exception as ex:
-        print(f"[mutualistas] Error abriendo {fname}: {ex}")
+        print(f"[mutualistas] Error procesando {fpath.name}: {ex}")
         return 0
 
-    enc = _detect_enc(header_bytes)
-    sep = _detect_sep_bytes(header_bytes, enc)
-
-    inserted = 0
-    try:
-        with zf.open(fname) as f:
-            reader = pd.read_csv(
-                f,
-                sep=sep,
-                encoding=enc,
-                dtype=str,
-                chunksize=_CHUNKSIZE,
-                on_bad_lines="skip",
-                low_memory=False,
-            )
-            for chunk in reader:
-                chunk.columns = [_norm(c) for c in chunk.columns]
-                records = []
-                for _, row in chunk.iterrows():
-                    rec = _parse_bruto_row(row)
-                    if rec is None:
-                        continue
-                    h = _hash_rec(rec)
-                    rec["hash_registro"] = h
-                    if h not in existing:
-                        records.append(rec)
-                        existing.add(h)
-                if records:
-                    _insert(records, _TABLE_BRUTO, engine)
-                    inserted += len(records)
-    except Exception as ex:
-        print(f"[mutualistas] Error procesando {fname}: {ex}")
-
     if inserted:
-        print(f"[mutualistas] {basename}: {inserted:,} filas nuevas -> mutualistas_captaciones_bruto")
+        print(f"[mutualistas] {fpath.name}: {inserted:,} filas nuevas -> {_TABLE_BRUTO}")
     else:
-        print(f"[mutualistas] {basename}: sin filas nuevas.")
+        print(f"[mutualistas] {fpath.name}: sin filas nuevas.")
     return inserted
 
 
-def _detect_enc(raw: bytes) -> str:
+# ---------------------------------------------------------------------------
+# Helpers de detección
+# ---------------------------------------------------------------------------
+
+def _detect_sector(fname: str) -> int | None:
+    m = re.search(r"[_\-]S(\d)[_\-\.]", fname, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"S([123])", fname, re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def _is_mutualista(fname: str) -> bool:
+    return bool(re.search(r"Mut", fname, re.IGNORECASE))
+
+
+def _is_captaciones_file(basename: str) -> bool:
+    name = basename.lower()
+    return "captacion" in name or bool(
+        re.search(r"[_\-](mut|s[123])[_\-\.]", name, re.IGNORECASE))
+
+
+def _year_from_dirpath(fpath: Path, root: Path) -> int | None:
+    """Extrae año del primer componente del path relativo al directorio raíz."""
     try:
-        raw.decode("utf-8")
-        return "utf-8-sig"
-    except UnicodeDecodeError:
-        return "latin-1"
+        rel = fpath.relative_to(root)
+        first = rel.parts[0] if len(rel.parts) > 1 else None
+        if first:
+            m = re.match(r"^(\d{4})", first)
+            if m:
+                return int(m.group(1))
+    except ValueError:
+        pass
+    return None
 
 
-def _detect_sep_bytes(raw: bytes, enc: str) -> str:
-    first_line = raw.decode(enc, errors="replace").split("\n")[0]
-    counts = {"\t": first_line.count("\t"),
-              "|":  first_line.count("|"),
-              ";":  first_line.count(";")}
-    return max(counts, key=counts.get)
+# ---------------------------------------------------------------------------
+# Parsers de fila
+# ---------------------------------------------------------------------------
+
+def _parse_reportes_row(header: list[str], row: tuple,
+                        sector: int | None, is_mut: bool) -> dict | None:
+    d = dict(zip(header, row))
+
+    fecha_corte = _to_date(d.get("FECHA DE CORTE") or d.get("FECHADECORTE"))
+    if fecha_corte is None:
+        return None
+
+    rec = {
+        "anio":             int(fecha_corte[:4]),
+        "saldo":            _to_float(d.get("SALDO")),
+        "num_clientes":     _to_int(d.get("NUMERO DE CLIENTES") or d.get("NUMERODECLIENTES")),
+        "num_cuentas":      _to_int(d.get("NUMERO DE CUENTAS") or d.get("NUMERODECUENTAS")),
+        "fecha_corte":      fecha_corte,
+        "region":           _clean(d.get("REGION")),
+        "provincia":        _clean(d.get("PROVINCIA")),
+        "canton":           _clean(d.get("CANTON")),
+        "tipo_deposito":    _clean(d.get("TIPO DE DEPOSITO") or d.get("TIPODEDEPOSITO")),
+        "estado_operacion": _clean(d.get("ESTADO OPERACION")
+                                   or d.get("ESTADO OPERACIÓN")
+                                   or d.get("ESTADOOPERACION")),
+        "ruc":              _clean(d.get("RUC")),
+        "razon_social":     _clean(d.get("RAZON SOCIAL") or d.get("RAZONSOCIAL")),
+    }
+    if not is_mut:
+        rec["sector"] = sector
+    return rec
 
 
 def _parse_bruto_row(row: pd.Series) -> dict | None:
@@ -581,8 +569,7 @@ def _parse_bruto_row(row: pd.Series) -> dict | None:
         return None
     return {
         "anio":              int(fecha_corte[:4]),
-        "tipo_persona":      _strip_quotes(g("TIPO_PERSONA", "TIPO DE PERSONA",
-                                             "TIPO PERSONA")),
+        "tipo_persona":      _strip_quotes(g("TIPO_PERSONA", "TIPO DE PERSONA", "TIPO PERSONA")),
         "fecha_corte":       fecha_corte,
         "segmento":          _strip_quotes(g("SEGMENTO")),
         "provincia":         _strip_quotes(g("PROVINCIA")),
@@ -592,17 +579,14 @@ def _parse_bruto_row(row: pd.Series) -> dict | None:
                                              "COD DPA", "COD_DPA")),
         "estado_operacion":  _strip_quotes(g("ESTADO_OPERACION", "ESTADO OPERACION",
                                              "ESTADO DE OPERACION")),
-        "tipo_cuenta":       _strip_quotes(g("TIPO_CUENTA", "TIPO DE CUENTA",
-                                             "TIPO CUENTA")),
+        "tipo_cuenta":       _strip_quotes(g("TIPO_CUENTA", "TIPO DE CUENTA", "TIPO CUENTA")),
         "banda_maduracion":  _strip_quotes(g("BANDAMADURACION", "BANDA MADURACION",
                                              "BANDA DE MADURACION")),
         "sexo":              _strip_quotes(g("SEXO")),
-        "rango_edad":        _strip_quotes(g("RANGOEDAD", "RANGO EDAD",
-                                             "RANGO DE EDAD")),
+        "rango_edad":        _strip_quotes(g("RANGOEDAD", "RANGO EDAD", "RANGO DE EDAD")),
         "nivel_instruccion": _strip_quotes(g("NIVELINSTRUCCION", "NIVEL INSTRUCCION",
                                              "NIVEL DE INSTRUCCION")),
-        "rango_saldo":       _strip_quotes(g("RANGOSALDO", "RANGO SALDO",
-                                             "RANGO DE SALDO")),
+        "rango_saldo":       _strip_quotes(g("RANGOSALDO", "RANGO SALDO", "RANGO DE SALDO")),
         "nro_cuentas":       _to_int(g("NROCUENTAS", "NRO CUENTAS",
                                        "NUMERO CUENTAS", "NUMERO DE CUENTAS")),
         "saldo_usd":         _to_float(g("SALDO (USD)", "SALDO_USD", "SALDO USD")),
@@ -629,18 +613,16 @@ def _insert(records: list[dict], table: str, engine) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers de texto / tipo
 # ---------------------------------------------------------------------------
 
 def _norm(c: str) -> str:
-    """Normaliza columna TXT: strip BOM y mayusculas (preserva underscores/espacios)."""
     c = re.sub(r"^[^\x20-\x7E]+", "", str(c).strip())
     return c.strip().upper()
 
 
 def _norm_col(c: str) -> str:
-    """Normaliza columna XLSM: strip acentos, BOM y char especiales."""
-    s = str(c).strip().replace("�", "")
+    s = str(c).strip().replace("▓", "")
     s = re.sub(r"^[^\x20-\x7E]+", "", s)
     nfkd = unicodedata.normalize("NFKD", s)
     ascii_s = "".join(ch for ch in nfkd if unicodedata.category(ch) != "Mn")
@@ -682,7 +664,6 @@ def _to_int(v) -> int | None:
 
 
 def _to_date(v) -> str | None:
-    """Convierte datetime, date string o Excel serial a 'YYYY-MM-DD'."""
     if v is None:
         return None
     from datetime import datetime, date
@@ -691,7 +672,6 @@ def _to_date(v) -> str | None:
     s = str(v).strip().rstrip(",").strip()
     if not s or s.lower() in ("nan", "none", ""):
         return None
-    # Formato ISO o similar
     m = re.match(r"(\d{4}-\d{2}-\d{2})", s)
     if m:
         return m.group(1)
@@ -699,21 +679,21 @@ def _to_date(v) -> str | None:
 
 
 def _hash_rec(rec: dict) -> str:
-    key = "|".join(
-        str(v) if v is not None else ""
-        for v in rec.values()
-    )
+    key = "|".join(str(v) if v is not None else "" for v in rec.values())
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-def _year_from_zippath(fname: str) -> int | None:
-    """Extrae el año del prefijo de directorio en un ZIP (ej: '2016/archivo.xlsm' -> 2016)."""
-    m = re.match(r"^(\d{4})/", fname)
-    return int(m.group(1)) if m else None
+def _detect_enc(raw: bytes) -> str:
+    try:
+        raw.decode("utf-8")
+        return "utf-8-sig"
+    except UnicodeDecodeError:
+        return "latin-1"
 
 
-def _is_captaciones_file(basename: str) -> bool:
-    """Verifica que el archivo sea un boletín de captaciones (no EEFF u otro producto)."""
-    name = basename.lower()
-    # Debe contener 'captaciones' o alguno de los identificadores conocidos (Mut, S1-S3)
-    return "captacion" in name or bool(re.search(r"[_\-](mut|s[123])[_\-\.]", name, re.IGNORECASE))
+def _detect_sep_bytes(raw: bytes, enc: str) -> str:
+    first_line = raw.decode(enc, errors="replace").split("\n")[0]
+    counts = {"\t": first_line.count("\t"),
+              "|":  first_line.count("|"),
+              ";":  first_line.count(";")}
+    return max(counts, key=counts.get)

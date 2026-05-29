@@ -53,7 +53,8 @@ data_verso/
 ├── utils/
 │   ├── base_engine.py          # Conexión SQLAlchemy a SQL Server
 │   ├── normalizer.py           # Funciones de limpieza de texto y números
-│   └── ciiu.py                 # Mapeo CIIU v4.0 Ecuador (código → descripción + nivel)
+│   ├── ciiu.py                 # Mapeo CIIU v4.0 Ecuador (código → descripción + nivel)
+│   └── export_excel.py         # Exportación interactiva de tablas a .xlsx
 │
 ├── src/
 │   ├── riesgo_pais/                      ✓ implementado
@@ -68,9 +69,13 @@ data_verso/
 │   ├── recaudacion_mensual/              ✓ implementado
 │   ├── mutualistas/                      ✓ implementado
 │   ├── pib_nominal_industria/            ✓ implementado
-│   └── ventas_actividad_economica_sri/   ✓ implementado
+│   ├── ventas_actividad_economica_sri/   ✓ implementado
+│   ├── pib_nominal_oferta/               ✓ implementado
+│   ├── supercias_utilidad/               ✓ implementado
+│   └── imaec/                            ✓ implementado
 │
 ├── downloads/                  # Archivos descargados (ignorados por git)
+├── exported_data/              # Exportaciones Excel locales (ignoradas por git)
 ├── requirements.txt
 └── README.md
 ```
@@ -468,6 +473,137 @@ python main.py --start 2022     # desde 2022
 
 ---
 
+### `pib_nominal_oferta`
+
+**URL:** https://contenido.bce.fin.ec/documentos/informacioneconomica/cuentasnacionales/ix_cuentasnacionalestrimestrales.html
+**Fuente:** Banco Central del Ecuador — Cuentas Nacionales Trimestrales
+**Periodicidad:** Trimestral (ediciones `tou_*.xlsx`, desde 2023; datos desde 2000.I)
+**Datos:** Oferta y Utilización de Bienes y Servicios — variables macroeconómicas (PIB, Consumo, FBKF, Exportaciones, Importaciones) en datos brutos y ajustados de estacionalidad.
+
+```bash
+cd src/pib_nominal_oferta
+python main.py
+python main.py --download-only
+python main.py --etl-only
+python main.py --start 2024
+```
+
+**Tablas:**
+
+| Tabla | Hojas fuente | Descripción |
+|---|---|---|
+| `pib_nominal_oferta_bruto` | `Dem_Corr_bru`, `Dem_Cad_bru`, `Dem_Ivol_bru` | Datos brutos — una fila por (anio, trimestre, variable, tipo_indice) |
+| `pib_nominal_oferta_ajustado` | 9 hojas `_ajus*` | Datos ajustados de estacionalidad, variaciones, deflactores y contribuciones |
+
+**Columna `tipo_indice`:**
+
+| Valor | Tabla |
+|---|---|
+| `Precios Corrientes` | bruto |
+| `Precios Encadenados` | bruto |
+| `Índices de Volumen Encadenados, 2018=100` | bruto |
+| `Precios Corrientes, Datos Ajustados de Estacionalidad` | ajustado |
+| `... Variación Interanual / Intertrimestral` | ajustado |
+| `Deflactores de Precios Encadenados, ...` | ajustado |
+| `Contribución al Crecimiento, ...` | ajustado |
+
+**Notas:**
+- El bot descubre automáticamente las nuevas ediciones trimestrales desde el HTML del BCE.
+- Cada edición contiene datos históricos desde 2000.I — la deduplicación por hash evita duplicados.
+
+---
+
+### `supercias_utilidad`
+
+**URL:** https://appscvsmovil.supercias.gob.ec/ranking/recursos/archivos/ranking_{YYYY}.xlsx
+**Fuente:** Superintendencia de Compañías, Valores y Seguros (Supercias)
+**Periodicidad:** Anual (publicación aprox. mayo-junio) — disponible desde 2010
+**Datos:** Ranking empresas Ecuador — posición, sector, actividad económica CIIU, activos, patrimonio, ventas, utilidades e impuesto a la renta.
+
+```bash
+cd src/supercias_utilidad
+python main.py                   # descarga 2010-presente + carga
+python main.py --start 2020      # solo desde 2020
+python main.py --download-only
+python main.py --etl-only
+```
+
+**Tabla `supercias_utilidad`:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `anio_archivo` | SMALLINT | Año del archivo descargado |
+| `posicion` | INT | Posición en ranking año actual (0 = no rankeado) |
+| `anio_ranking` | SMALLINT | Año del ranking (0 si no aplica) |
+| `posicion_ant` / `anio_ranking_ant` | INT/SMALLINT | Posición y año del ranking anterior |
+| `expediente` | INT | Número de expediente de la empresa |
+| `nombre` | NVARCHAR(500) | Razón social |
+| `tipo_compania` | NVARCHAR(200) | Tipo jurídico (Anónima, Responsabilidad Limitada, etc.) |
+| `actividad_eco` | NVARCHAR(MAX) | Código + descripción CIIU de la actividad |
+| `region`, `provincia`, `ciudad` | NVARCHAR | Ubicación |
+| `tamano` | NVARCHAR(50) | Microempresa / Pequeña / Mediana / Grande |
+| `sector` | NVARCHAR(100) | Societario / Mercado de Valores |
+| `cant_empleados` | INT | |
+| `activo`, `patrimonio`, `ingreso_ventas` | FLOAT | Financieros en USD |
+| `utilidad_ai`, `utilidad_ej`, `utilidad_neta`, `ir_causado`, `ingreso_total` | FLOAT | |
+
+**Notas:**
+- ~50 000–150 000 filas por año; estructura consistente desde 2010.
+- El servidor de Supercias usa TLS legacy — el bot usa un adaptador SSL permisivo automáticamente.
+- Los archivos históricos (< año actual − 1) se descargan una sola vez; el año anterior siempre se re-verifica con ETag.
+- Deduplicación por `(anio_archivo, expediente)`.
+
+---
+
+### `imaec`
+
+**URL:** https://contenido.bce.fin.ec/documentos/informacioneconomica/cuentasnacionales/ix_IMAEC.html
+**Fuente:** Banco Central del Ecuador — Cuentas Nacionales
+**Periodicidad:** Mensual — nuevo archivo cada mes (`IMAEc_{YYYYMM}.xlsx`), datos desde 2018.ene
+**Datos:** Índice de Actividad Económica Coyuntural — índices de volumen encadenados por actividad económica y por clasificación petrolero/no petrolero.
+
+```bash
+cd src/imaec
+python main.py
+python main.py --download-only
+python main.py --etl-only
+```
+
+**Tablas:**
+
+| Tabla | Hojas fuente | Descripción |
+|---|---|---|
+| `imaec_bruto` | `Of_Ivol_brut_clas`, `Of_Ivol_brut_clas_pet` | Datos brutos por actividad y por agrupación petrolera |
+| `imaec_ajustado` | 8 hojas `_ajus*` | Ajustados de estacionalidad, variaciones interanuales, contribuciones y acumulados |
+
+**Esquema:**
+
+| Columna | Tipo | Descripción |
+|---|---|---|
+| `anio` | SMALLINT | Año del dato |
+| `mes` | NVARCHAR(3) | Mes en español (`ene`, `feb`, …, `dic`) |
+| `actividad` | NVARCHAR(300) | Sector económico (Agricultura, Manufactura, IMAEc, etc.) |
+| `valor` | FLOAT | Valor del índice |
+| `tipo_indice` | NVARCHAR(300) | Tipo de medición (ver tabla abajo) |
+| `nombre_hoja` | NVARCHAR(50) | Hoja de origen en el Excel |
+
+**Columna `tipo_indice`:**
+
+| Valor | Tabla |
+|---|---|
+| `Índices de Volumen Encadenados, 2018=100` | bruto |
+| `..., Petrolero/No Petrolero` | bruto |
+| `..., Datos Ajustados de Estacionalidad` | ajustado |
+| `..., Variación Interanual` | ajustado |
+| `Contribución al Crecimiento, ...` | ajustado |
+| `..., Variación Acumulada Interanual` | ajustado |
+
+**Notas:**
+- El bot descubre el URL vigente del HTML de la BCE (cambia mensualmente) — al publicarse un nuevo mes, la próxima ejecución lo detecta y descarga automáticamente.
+- Deduplicación por `(anio, mes, actividad, tipo_indice)` — re-ejecutar solo inserta los meses nuevos.
+
+---
+
 ## Utilitarios (`utils/`)
 
 ### `base_engine.py`
@@ -475,6 +611,21 @@ Crea y devuelve el engine de SQLAlchemy conectado a SQL Server con autenticació
 
 ### `normalizer.py`
 Funciones de limpieza y normalización de texto y valores numéricos usadas por múltiples loaders.
+
+### `export_excel.py`
+Exporta tablas de la BD a un archivo `.xlsx` dividido por hojas. Guarda en `exported_data/` (carpeta local, no sube a git).
+
+```bash
+python utils/export_excel.py                          # menú interactivo
+python utils/export_excel.py --out reporte.xlsx       # nombre personalizado
+python utils/export_excel.py --limit 1000             # máx 1000 filas por tabla
+python utils/export_excel.py --tablas riesgo_pais imaec_bruto
+```
+
+Opciones del menú interactivo:
+- **A** — exportar todas las tablas
+- **G** — filtrar por grupo/módulo (ej: `imaec`, `ventas_sri`)
+- **N** — seleccionar por número (ej: `1,3,5` o `2-8`)
 
 ### `ciiu.py`
 Lee la hoja `CIIU` del archivo de referencia (`CIUS Para ventas por actividad economicaFInal 2.xls`) y construye un diccionario `{codigo → (descripcion, nivel)}` con los 3 261 códigos CIIU v4.0 Ecuador.

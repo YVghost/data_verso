@@ -16,8 +16,8 @@ Deflate64: col_bruto usa compress_type=9. Requiere el paquete 'inflate64'.
 """
 
 import hashlib
-import io
 import re
+import shutil
 import sys
 import unicodedata
 import zipfile
@@ -455,6 +455,48 @@ def _get_hashes(engine, table: str) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
+# Extracción a disco
+# ---------------------------------------------------------------------------
+
+def _ensure_extracted(zip_path: Path) -> Path:
+    """
+    Extrae zip_path a <parent>/extracted/<stem>/.
+    - Si el directorio ya existe y el ZIP no fue re-descargado, no re-extrae.
+    - Si el ZIP es más nuevo que la extracción (re-descarga), borra y re-extrae.
+    - El parche inflate64 (Deflate64) debe estar activo antes de llamar aquí.
+    """
+    out = zip_path.parent / "extracted" / zip_path.stem
+    if out.exists() and any(out.rglob("*")):
+        if zip_path.stat().st_mtime <= out.stat().st_mtime:
+            return out
+        shutil.rmtree(out)
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"[colocaciones] Extrayendo {zip_path.name}...")
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(out)
+        count = sum(1 for p in out.rglob("*") if p.is_file())
+        print(f"[colocaciones] {zip_path.name}: {count} archivos extraídos.")
+    except Exception as ex:
+        print(f"[colocaciones] Error extrayendo {zip_path.name}: {ex}")
+    return out
+
+
+def _year_from_dirpath(fpath: Path, root: Path) -> int | None:
+    """Extrae año del primer componente del path relativo al directorio raíz."""
+    try:
+        rel = fpath.relative_to(root)
+        first = rel.parts[0] if len(rel.parts) > 1 else None
+        if first:
+            m = re.match(r"^(\d{4})", first)
+            if m:
+                return int(m.group(1))
+    except ValueError:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Loader XLSM (volumen + colocaciones)
 # ---------------------------------------------------------------------------
 
@@ -462,29 +504,25 @@ def _load_xlsm_zip(zip_path: Path, sheet_name: str, parser,
                    table_mut: str, table_sec: str,
                    existing_mut: set, existing_sec: set,
                    engine, min_year: int = 2017) -> tuple[int, int]:
-    label = zip_path.name
-    print(f"[colocaciones] XLSM {sheet_name}: {label}")
-    try:
-        zf = zipfile.ZipFile(zip_path)
-    except Exception as ex:
-        print(f"[colocaciones] Error abriendo {label}: {ex}")
-        return 0, 0
+    print(f"[colocaciones] XLSM {sheet_name}: {zip_path.name}")
+    extract_dir = _ensure_extracted(zip_path)
 
     _XLSM = {".xlsm", ".xlsx"}
     _CSV  = {".txt", ".csv"}
     new_mut = new_sec = 0
 
-    for fname in zf.namelist():
-        basename = fname.split("/")[-1]
-        ext = Path(basename).suffix.lower()
-
+    for fpath in sorted(extract_dir.rglob("*")):
+        if not fpath.is_file():
+            continue
+        ext = fpath.suffix.lower()
         if ext not in _XLSM and ext not in _CSV:
             continue
 
-        dir_year = _year_from_zippath(fname)
+        dir_year = _year_from_dirpath(fpath, extract_dir)
         if dir_year is not None and dir_year < min_year:
             continue
 
+        basename = fpath.name
         sector = _detect_sector(basename)
         is_mut = _is_mutualista(basename)
         if not is_mut and sector is None:
@@ -495,12 +533,9 @@ def _load_xlsm_zip(zip_path: Path, sheet_name: str, parser,
 
         if ext in _XLSM:
             try:
-                wb = openpyxl.load_workbook(
-                    io.BytesIO(zf.read(fname)), read_only=True, data_only=True
-                )
-                # Buscar hoja: exacto → keyword → cualquier "base" → primera
+                wb = openpyxl.load_workbook(fpath, read_only=True, data_only=True)
                 _kw = sheet_name.split("_")[-1].lower()
-                _sh = (sheet_name if sheet_name in wb.sheetnames else None)
+                _sh = sheet_name if sheet_name in wb.sheetnames else None
                 if _sh is None:
                     _cands = [s for s in wb.sheetnames
                               if _kw in s.lower() or "base" in s.lower()]
@@ -512,7 +547,7 @@ def _load_xlsm_zip(zip_path: Path, sheet_name: str, parser,
                 rows = list(ws.iter_rows(values_only=True))
                 wb.close()
             except Exception as ex:
-                print(f"[colocaciones] Error leyendo {fname}: {ex}")
+                print(f"[colocaciones] Error leyendo {basename}: {ex}")
                 continue
 
             if not rows or len(rows) < 2:
@@ -536,114 +571,25 @@ def _load_xlsm_zip(zip_path: Path, sheet_name: str, parser,
                     new_mut += len(records)
                 else:
                     new_sec += len(records)
-                print(f"[colocaciones] {fname}: {len(records):,} -> {tbl}")
+                print(f"[colocaciones] {basename}: {len(records):,} -> {tbl}")
             else:
-                print(f"[colocaciones] {fname}: sin filas nuevas.")
+                print(f"[colocaciones] {basename}: sin filas nuevas.")
 
         else:  # TXT / CSV
             try:
-                with zf.open(fname) as f:
-                    header_bytes = f.read(4096)
-                enc = _detect_enc(header_bytes)
-                sep = _detect_sep_bytes(header_bytes, enc)
+                sample  = fpath.read_bytes()[:4096]
+                enc     = _detect_enc(sample)
+                sep     = _detect_sep_bytes(sample, enc)
                 inserted = 0
-                with zf.open(fname) as f:
-                    reader = pd.read_csv(
-                        f, sep=sep, encoding=enc, dtype=str,
-                        chunksize=_CHUNKSIZE, on_bad_lines="skip",
-                        low_memory=False,
-                    )
-                    for chunk in reader:
-                        header = [_norm_col(c) for c in chunk.columns]
-                        records = []
-                        for _, df_row in chunk.iterrows():
-                            rec = parser(header, tuple(df_row.values), sector, is_mut)
-                            if rec is None:
-                                continue
-                            h = _hash_rec(rec)
-                            rec["hash_registro"] = h
-                            if h not in existing:
-                                records.append(rec)
-                                existing.add(h)
-                        if records:
-                            _insert(records, tbl, engine)
-                            inserted += len(records)
-                            if is_mut:
-                                new_mut += len(records)
-                            else:
-                                new_sec += len(records)
-            except Exception as ex:
-                print(f"[colocaciones] Error procesando {fname}: {ex}")
-                continue
-
-            if inserted:
-                print(f"[colocaciones] {fname}: {inserted:,} -> {tbl}")
-            else:
-                print(f"[colocaciones] {fname}: sin filas nuevas.")
-
-    zf.close()
-    return new_mut, new_sec
-
-
-# ---------------------------------------------------------------------------
-# Loader bruto (TXT / Deflate64)
-# ---------------------------------------------------------------------------
-
-def _load_bruto_zip(zip_path: Path, table: str, row_parser,
-                    engine, existing: set,
-                    use_deflate64: bool = False,
-                    xlsm_sheets: list[str] | None = None) -> int:
-    label = zip_path.name
-    print(f"[colocaciones] Bruto {table}: {label}")
-    try:
-        zf = zipfile.ZipFile(zip_path)
-    except Exception as ex:
-        print(f"[colocaciones] Error abriendo {label}: {ex}")
-        return 0
-
-    _XLSM_EXTS = {".xlsm", ".xlsx"}
-    _CSV_EXTS  = {".txt", ".csv", ".dat"}   # .dat = Deflate64 col_bruto 2017-2021
-    total_new  = 0
-
-    for fname in zf.namelist():
-        ext = Path(fname.split("/")[-1]).suffix.lower()
-
-        if ext in _XLSM_EXTS:
-            total_new += _process_bruto_xlsm(
-                zf, fname, table, row_parser, engine, existing, xlsm_sheets)
-            continue
-
-        if ext == ".rar":
-            print(f"[colocaciones] {fname}: formato RAR no soportado — omitido. "
-                  f"Descomprimir manualmente y volver a ejecutar con --etl-only.")
-            continue
-
-        if ext not in _CSV_EXTS:
-            continue
-
-        try:
-            with zf.open(fname) as f:
-                header_bytes = f.read(4096)
-        except Exception as ex:
-            print(f"[colocaciones] Error abriendo {fname}: {ex}")
-            continue
-
-        enc = _detect_enc(header_bytes)
-        sep = _detect_sep_bytes(header_bytes, enc)
-        inserted = 0
-
-        try:
-            with zf.open(fname) as f:
-                reader = pd.read_csv(
-                    f, sep=sep, encoding=enc, dtype=str,
-                    chunksize=_CHUNKSIZE, on_bad_lines="skip",
-                    low_memory=False,
+                reader  = pd.read_csv(
+                    fpath, sep=sep, encoding=enc, dtype=str,
+                    chunksize=_CHUNKSIZE, on_bad_lines="skip", low_memory=False,
                 )
                 for chunk in reader:
-                    chunk.columns = [_norm_col(c) for c in chunk.columns]
+                    header  = [_norm_col(c) for c in chunk.columns]
                     records = []
-                    for _, row in chunk.iterrows():
-                        rec = row_parser(row)
+                    for _, df_row in chunk.iterrows():
+                        rec = parser(header, tuple(df_row.values), sector, is_mut)
                         if rec is None:
                             continue
                         h = _hash_rec(rec)
@@ -652,32 +598,106 @@ def _load_bruto_zip(zip_path: Path, table: str, row_parser,
                             records.append(rec)
                             existing.add(h)
                     if records:
-                        _insert(records, table, engine)
+                        _insert(records, tbl, engine)
                         inserted += len(records)
+                        if is_mut:
+                            new_mut += len(records)
+                        else:
+                            new_sec += len(records)
+            except Exception as ex:
+                print(f"[colocaciones] Error procesando {basename}: {ex}")
+                continue
+
+            if inserted:
+                print(f"[colocaciones] {basename}: {inserted:,} -> {tbl}")
+            else:
+                print(f"[colocaciones] {basename}: sin filas nuevas.")
+
+    return new_mut, new_sec
+
+
+# ---------------------------------------------------------------------------
+# Loader bruto (TXT / CSV / DAT — incluyendo Deflate64)
+# ---------------------------------------------------------------------------
+
+def _load_bruto_zip(zip_path: Path, table: str, row_parser,
+                    engine, existing: set,
+                    use_deflate64: bool = False,
+                    xlsm_sheets: list[str] | None = None) -> int:
+    print(f"[colocaciones] Bruto {table}: {zip_path.name}")
+
+    if use_deflate64 and not _DEFLATE64_OK:
+        print("[colocaciones] col_bruto omitido: instalar 'inflate64' para soporte Deflate64.")
+        return 0
+
+    extract_dir = _ensure_extracted(zip_path)
+
+    _XLSM_EXTS = {".xlsm", ".xlsx"}
+    _CSV_EXTS  = {".txt", ".csv", ".dat"}
+    total_new  = 0
+
+    for fpath in sorted(extract_dir.rglob("*")):
+        if not fpath.is_file():
+            continue
+        ext = fpath.suffix.lower()
+
+        if ext == ".rar":
+            print(f"[colocaciones] {fpath.name}: formato RAR no soportado — omitido.")
+            continue
+
+        if ext in _XLSM_EXTS:
+            total_new += _process_bruto_xlsm(
+                fpath, table, row_parser, engine, existing, xlsm_sheets)
+            continue
+
+        if ext not in _CSV_EXTS:
+            continue
+
+        try:
+            sample  = fpath.read_bytes()[:4096]
+            enc     = _detect_enc(sample)
+            sep     = _detect_sep_bytes(sample, enc)
+            inserted = 0
+            reader  = pd.read_csv(
+                fpath, sep=sep, encoding=enc, dtype=str,
+                chunksize=_CHUNKSIZE, on_bad_lines="skip", low_memory=False,
+            )
+            for chunk in reader:
+                chunk.columns = [_norm_col(c) for c in chunk.columns]
+                records = []
+                for _, row in chunk.iterrows():
+                    rec = row_parser(row)
+                    if rec is None:
+                        continue
+                    h = _hash_rec(rec)
+                    rec["hash_registro"] = h
+                    if h not in existing:
+                        records.append(rec)
+                        existing.add(h)
+                if records:
+                    _insert(records, table, engine)
+                    inserted += len(records)
         except Exception as ex:
-            print(f"[colocaciones] Error procesando {fname}: {ex}")
+            print(f"[colocaciones] Error procesando {fpath.name}: {ex}")
+            continue
 
         if inserted:
-            print(f"[colocaciones] {fname}: {inserted:,} -> {table}")
+            print(f"[colocaciones] {fpath.name}: {inserted:,} -> {table}")
         else:
-            print(f"[colocaciones] {fname}: sin filas nuevas.")
+            print(f"[colocaciones] {fpath.name}: sin filas nuevas.")
         total_new += inserted
 
-    zf.close()
     return total_new
 
 
-def _process_bruto_xlsm(zf: zipfile.ZipFile, fname: str,
-                         table: str, row_parser,
+def _process_bruto_xlsm(fpath: Path, table: str, row_parser,
                          engine, existing: set,
                          sheet_names: list[str] | None = None) -> int:
     """Lee un XLSM/XLSX de bases brutas y lo carga con el mismo parser TXT."""
-    basename = fname.split("/")[-1]
     try:
-        data = zf.read(fname)
-        wb   = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        wb = openpyxl.load_workbook(fpath, read_only=True, data_only=True)
     except Exception as ex:
-        print(f"[colocaciones] Error abriendo XLSM {basename}: {ex}")
+        print(f"[colocaciones] Error abriendo XLSM {fpath.name}: {ex}")
         return 0
 
     ws_name = None
@@ -723,9 +743,9 @@ def _process_bruto_xlsm(zf: zipfile.ZipFile, fname: str,
         inserted += len(batch)
 
     if inserted:
-        print(f"[colocaciones] {basename} (XLSM): {inserted:,} -> {table}")
+        print(f"[colocaciones] {fpath.name} (XLSM): {inserted:,} -> {table}")
     else:
-        print(f"[colocaciones] {basename} (XLSM): sin filas nuevas.")
+        print(f"[colocaciones] {fpath.name} (XLSM): sin filas nuevas.")
     return inserted
 
 
@@ -740,25 +760,21 @@ def _tarjeta_is_con(name: str) -> bool:
 
 def _load_tarjetas_zip(zip_path: Path, engine,
                        existing_con: set, existing_sin: set) -> tuple[int, int]:
-    label = zip_path.name
-    print(f"[colocaciones] Tarjetas: {label}")
-    try:
-        zf = zipfile.ZipFile(zip_path)
-    except Exception as ex:
-        print(f"[colocaciones] Error abriendo {label}: {ex}")
-        return 0, 0
+    print(f"[colocaciones] Tarjetas: {zip_path.name}")
+    extract_dir = _ensure_extracted(zip_path)
 
     _XLSM = {".xlsm", ".xlsx"}
     _CSV  = {".txt", ".csv"}
     new_con = new_sin = 0
 
-    for fname in zf.namelist():
-        basename = fname.split("/")[-1]
-        ext = Path(basename).suffix.lower()
+    for fpath in sorted(extract_dir.rglob("*")):
+        if not fpath.is_file():
+            continue
+        ext      = fpath.suffix.lower()
+        basename = fpath.name
 
         if ext in _XLSM:
-            c, s = _process_tarjetas_xlsm(zf, fname, basename, engine,
-                                           existing_con, existing_sin)
+            c, s = _process_tarjetas_xlsm(fpath, engine, existing_con, existing_sin)
             new_con += c
             new_sin += s
             continue
@@ -772,40 +788,32 @@ def _load_tarjetas_zip(zip_path: Path, engine,
         parser   = _parse_tarjeta_con_row if is_con else _parse_tarjeta_sin_row
 
         try:
-            with zf.open(fname) as f:
-                header_bytes = f.read(4096)
+            sample  = fpath.read_bytes()[:4096]
+            enc     = _detect_enc(sample)
+            sep     = _detect_sep_bytes(sample, enc)
+            inserted = 0
+            reader  = pd.read_csv(
+                fpath, sep=sep, encoding=enc, dtype=str,
+                chunksize=_CHUNKSIZE, on_bad_lines="skip", low_memory=False,
+            )
+            for chunk in reader:
+                chunk.columns = [_norm_col(c) for c in chunk.columns]
+                records = []
+                for _, row in chunk.iterrows():
+                    rec = parser(row)
+                    if rec is None:
+                        continue
+                    h = _hash_rec(rec)
+                    rec["hash_registro"] = h
+                    if h not in existing:
+                        records.append(rec)
+                        existing.add(h)
+                if records:
+                    _insert(records, table, engine)
+                    inserted += len(records)
         except Exception as ex:
-            print(f"[colocaciones] Error leyendo {fname}: {ex}")
+            print(f"[colocaciones] Error procesando {basename}: {ex}")
             continue
-
-        enc = _detect_enc(header_bytes)
-        sep = _detect_sep_bytes(header_bytes, enc)
-        inserted = 0
-
-        try:
-            with zf.open(fname) as f:
-                reader = pd.read_csv(
-                    f, sep=sep, encoding=enc, dtype=str,
-                    chunksize=_CHUNKSIZE, on_bad_lines="skip",
-                    low_memory=False,
-                )
-                for chunk in reader:
-                    chunk.columns = [_norm_col(c) for c in chunk.columns]
-                    records = []
-                    for _, row in chunk.iterrows():
-                        rec = parser(row)
-                        if rec is None:
-                            continue
-                        h = _hash_rec(rec)
-                        rec["hash_registro"] = h
-                        if h not in existing:
-                            records.append(rec)
-                            existing.add(h)
-                    if records:
-                        _insert(records, table, engine)
-                        inserted += len(records)
-        except Exception as ex:
-            print(f"[colocaciones] Error procesando {fname}: {ex}")
 
         if inserted:
             print(f"[colocaciones] {basename}: {inserted:,} -> {table}")
@@ -817,27 +825,23 @@ def _load_tarjetas_zip(zip_path: Path, engine,
         else:
             new_sin += inserted
 
-    zf.close()
     return new_con, new_sin
 
 
-def _process_tarjetas_xlsm(zf: zipfile.ZipFile, fname: str, basename: str,
-                             engine, existing_con: set,
-                             existing_sin: set) -> tuple[int, int]:
+def _process_tarjetas_xlsm(fpath: Path, engine,
+                             existing_con: set, existing_sin: set) -> tuple[int, int]:
     """Lee XLSM/XLSX de tarjetas. Detecta 'con'/'sin' por hoja o por nombre de archivo."""
     try:
-        data = zf.read(fname)
-        wb   = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        wb = openpyxl.load_workbook(fpath, read_only=True, data_only=True)
     except Exception as ex:
-        print(f"[colocaciones] Error abriendo XLSM {basename}: {ex}")
+        print(f"[colocaciones] Error abriendo XLSM {fpath.name}: {ex}")
         return 0, 0
 
-    file_is_con = _tarjeta_is_con(basename)
+    file_is_con = _tarjeta_is_con(fpath.name)
     new_con = new_sin = 0
 
     for sheet_name in wb.sheetnames:
         sn = sheet_name.lower()
-        # Prefer sheet name to detect type; fall back to filename
         if "sin" in sn:
             is_con = False
         elif "con" in sn:
@@ -876,7 +880,7 @@ def _process_tarjetas_xlsm(zf: zipfile.ZipFile, fname: str, basename: str,
             inserted += len(batch)
 
         if inserted:
-            print(f"[colocaciones] {basename}/{sheet_name}: {inserted:,} -> {table}")
+            print(f"[colocaciones] {fpath.name}/{sheet_name}: {inserted:,} -> {table}")
         if is_con:
             new_con += inserted
         else:
@@ -1293,11 +1297,6 @@ def _detect_sector(fname: str) -> int | None:
 
 def _is_mutualista(fname: str) -> bool:
     return bool(re.search(r"Mut", fname, re.IGNORECASE))
-
-
-def _year_from_zippath(fname: str) -> int | None:
-    m = re.match(r"^(\d{4})[/\-]", fname)
-    return int(m.group(1)) if m else None
 
 
 def _detect_enc(raw: bytes) -> str:

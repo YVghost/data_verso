@@ -543,35 +543,43 @@ def _load_xlsm_zip(zip_path: Path, sheet_name: str, parser,
                 if _sh is None:
                     wb.close()
                     continue
-                ws   = wb[_sh]
-                rows = list(ws.iter_rows(values_only=True))
-                wb.close()
+                ws       = wb[_sh]
+                rows_gen = ws.iter_rows(values_only=True)
+                try:
+                    header = [_norm_col(c) for c in next(rows_gen)]
+                except StopIteration:
+                    wb.close()
+                    continue
             except Exception as ex:
                 print(f"[colocaciones] Error leyendo {basename}: {ex}")
                 continue
 
-            if not rows or len(rows) < 2:
-                continue
-
-            header  = [_norm_col(c) for c in rows[0]]
-            records = []
-            for row in rows[1:]:
+            batch = []
+            inserted_xlsm = 0
+            for row in rows_gen:
                 rec = parser(header, row, sector, is_mut)
                 if rec is None:
                     continue
                 h = _hash_rec(rec)
                 rec["hash_registro"] = h
                 if h not in existing:
-                    records.append(rec)
+                    batch.append(rec)
                     existing.add(h)
+                if len(batch) >= _CHUNKSIZE:
+                    _insert(batch, tbl, engine)
+                    inserted_xlsm += len(batch)
+                    if is_mut: new_mut += len(batch)
+                    else:      new_sec += len(batch)
+                    batch = []
+            if batch:
+                _insert(batch, tbl, engine)
+                inserted_xlsm += len(batch)
+                if is_mut: new_mut += len(batch)
+                else:      new_sec += len(batch)
+            wb.close()
 
-            if records:
-                _insert(records, tbl, engine)
-                if is_mut:
-                    new_mut += len(records)
-                else:
-                    new_sec += len(records)
-                print(f"[colocaciones] {basename}: {len(records):,} -> {tbl}")
+            if inserted_xlsm:
+                print(f"[colocaciones] {basename}: {inserted_xlsm:,} -> {tbl}")
             else:
                 print(f"[colocaciones] {basename}: sin filas nuevas.")
 
@@ -588,8 +596,8 @@ def _load_xlsm_zip(zip_path: Path, sheet_name: str, parser,
                 for chunk in reader:
                     header  = [_norm_col(c) for c in chunk.columns]
                     records = []
-                    for _, df_row in chunk.iterrows():
-                        rec = parser(header, tuple(df_row.values), sector, is_mut)
+                    for row_vals in chunk.values:
+                        rec = parser(header, tuple(row_vals), sector, is_mut)
                         if rec is None:
                             continue
                         h = _hash_rec(rec)
@@ -664,8 +672,10 @@ def _load_bruto_zip(zip_path: Path, table: str, row_parser,
             )
             for chunk in reader:
                 chunk.columns = [_norm_col(c) for c in chunk.columns]
-                records = []
-                for _, row in chunk.iterrows():
+                col_names = list(chunk.columns)
+                records   = []
+                for row_vals in chunk.values:
+                    row = pd.Series(dict(zip(col_names, row_vals)))
                     rec = row_parser(row)
                     if rec is None:
                         continue
@@ -714,19 +724,19 @@ def _process_bruto_xlsm(fpath: Path, table: str, row_parser,
         wb.close()
         return 0
 
-    ws   = wb[ws_name]
-    rows = list(ws.iter_rows(values_only=True))
-    wb.close()
-
-    if not rows or len(rows) < 2:
+    ws       = wb[ws_name]
+    rows_gen = ws.iter_rows(values_only=True)
+    try:
+        header = [_norm_col(c) for c in next(rows_gen)]
+    except StopIteration:
+        wb.close()
         return 0
 
-    header   = [_norm_col(c) for c in rows[0]]
     batch    = []
     inserted = 0
-    for row in rows[1:]:
-        series = pd.Series(dict(zip(header, row)))
-        rec = row_parser(series)
+    for row in rows_gen:
+        row_dict = dict(zip(header, row))
+        rec = row_parser(pd.Series(row_dict))
         if rec is None:
             continue
         h = _hash_rec(rec)
@@ -738,9 +748,12 @@ def _process_bruto_xlsm(fpath: Path, table: str, row_parser,
             _insert(batch, table, engine)
             inserted += len(batch)
             batch = []
+
     if batch:
         _insert(batch, table, engine)
         inserted += len(batch)
+
+    wb.close()
 
     if inserted:
         print(f"[colocaciones] {fpath.name} (XLSM): {inserted:,} -> {table}")
@@ -798,8 +811,10 @@ def _load_tarjetas_zip(zip_path: Path, engine,
             )
             for chunk in reader:
                 chunk.columns = [_norm_col(c) for c in chunk.columns]
-                records = []
-                for _, row in chunk.iterrows():
+                col_names = list(chunk.columns)
+                records   = []
+                for row_vals in chunk.values:
+                    row = pd.Series(dict(zip(col_names, row_vals)))
                     rec = parser(row)
                     if rec is None:
                         continue
@@ -853,15 +868,16 @@ def _process_tarjetas_xlsm(fpath: Path, engine,
         existing = existing_con   if is_con else existing_sin
         parser   = _parse_tarjeta_con_row if is_con else _parse_tarjeta_sin_row
 
-        ws   = wb[sheet_name]
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows or len(rows) < 2:
+        ws       = wb[sheet_name]
+        rows_gen = ws.iter_rows(values_only=True)
+        try:
+            header = [_norm_col(c) for c in next(rows_gen)]
+        except StopIteration:
             continue
 
-        header   = [_norm_col(c) for c in rows[0]]
         batch    = []
         inserted = 0
-        for row in rows[1:]:
+        for row in rows_gen:
             series = pd.Series(dict(zip(header, row)))
             rec = parser(series)
             if rec is None:

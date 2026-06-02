@@ -282,53 +282,62 @@ def _load_reportes_zip(zip_path: Path, engine,
                 if not _pref:
                     wb.close()
                     continue
-                ws   = wb[_pref[0]]
-                rows = list(ws.iter_rows(values_only=True))
-                wb.close()
+                ws       = wb[_pref[0]]
+                rows_gen = ws.iter_rows(values_only=True)
+                try:
+                    header = [_norm_col(str(c)) for c in next(rows_gen)]
+                except StopIteration:
+                    wb.close()
+                    continue
             except Exception as ex:
                 print(f"[mutualistas] Error leyendo {basename}: {ex}")
                 continue
 
-            if not rows or len(rows) < 2:
-                continue
-
-            header  = [_norm_col(str(c)) for c in rows[0]]
-            records = []
-            for row in rows[1:]:
+            batch_rep = []
+            inserted_rep = 0
+            for row in rows_gen:
                 rec = _parse_reportes_row(header, row, sector, is_mut)
                 if rec is None:
                     continue
                 h = _hash_rec(rec)
                 rec["hash_registro"] = h
                 if h not in existing:
-                    records.append(rec)
+                    batch_rep.append(rec)
                     existing.add(h)
+                if len(batch_rep) >= _CHUNKSIZE:
+                    _insert(batch_rep, tbl, engine)
+                    inserted_rep += len(batch_rep)
+                    if is_mut: new_mut += len(batch_rep)
+                    else:      new_sec += len(batch_rep)
+                    batch_rep = []
+            if batch_rep:
+                _insert(batch_rep, tbl, engine)
+                inserted_rep += len(batch_rep)
+                if is_mut: new_mut += len(batch_rep)
+                else:      new_sec += len(batch_rep)
+            wb.close()
 
-            if records:
-                _insert(records, tbl, engine)
-                if is_mut:
-                    new_mut += len(records)
-                else:
-                    new_sec += len(records)
-                print(f"[mutualistas] {basename}: {len(records):,} filas nuevas -> {tbl}")
+            if inserted_rep:
+                print(f"[mutualistas] {basename}: {inserted_rep:,} filas nuevas -> {tbl}")
             else:
                 print(f"[mutualistas] {basename}: sin filas nuevas.")
 
         else:  # TXT / CSV
             try:
-                enc = _detect_enc(fpath.read_bytes()[:4096])
-                sep = _detect_sep_bytes(fpath.read_bytes()[:4096], enc)
+                sample  = fpath.read_bytes()[:4096]
+                enc     = _detect_enc(sample)
+                sep     = _detect_sep_bytes(sample, enc)
                 inserted = 0
-                reader = pd.read_csv(
+                reader  = pd.read_csv(
                     fpath, sep=sep, encoding=enc, dtype=str,
                     chunksize=_CHUNKSIZE, on_bad_lines="skip", low_memory=False,
                 )
                 for chunk in reader:
                     header  = [_norm_col(c) for c in chunk.columns]
                     records = []
-                    for _, df_row in chunk.iterrows():
-                        rec = _parse_reportes_row(
-                            header, tuple(df_row.values), sector, is_mut)
+                    # to_dict('records') es 10-50x más rápido que iterrows()
+                    for row_vals in chunk.values:
+                        rec = _parse_reportes_row(header, tuple(row_vals), sector, is_mut)
                         if rec is None:
                             continue
                         h = _hash_rec(rec)
@@ -414,19 +423,21 @@ def _process_bases_xlsm(fpath: Path, engine, existing: set) -> int:
         wb.close()
         return 0
 
-    ws   = wb[sheet_name]
-    rows = list(ws.iter_rows(values_only=True))
-    wb.close()
+    ws       = wb[sheet_name]
+    rows_gen = ws.iter_rows(values_only=True)
 
-    if not rows or len(rows) < 2:
+    # Leer encabezado sin cargar todo en RAM
+    try:
+        header = [_norm_col(c) for c in next(rows_gen)]
+    except StopIteration:
+        wb.close()
         return 0
 
-    header   = [_norm_col(c) for c in rows[0]]
     batch    = []
     inserted = 0
-    for row in rows[1:]:
-        series = pd.Series(dict(zip(header, row)))
-        rec = _parse_bruto_row(series)
+    for row in rows_gen:
+        row_dict = dict(zip(header, row))
+        rec = _parse_bruto_row(row_dict)
         if rec is None:
             continue
         h = _hash_rec(rec)
@@ -438,9 +449,12 @@ def _process_bases_xlsm(fpath: Path, engine, existing: set) -> int:
             _insert(batch, _TABLE_BRUTO, engine)
             inserted += len(batch)
             batch = []
+
     if batch:
         _insert(batch, _TABLE_BRUTO, engine)
         inserted += len(batch)
+
+    wb.close()
 
     if inserted:
         print(f"[mutualistas] {fpath.name}: {inserted:,} filas nuevas -> {_TABLE_BRUTO}")
@@ -450,21 +464,25 @@ def _process_bases_xlsm(fpath: Path, engine, existing: set) -> int:
 
 
 def _process_bases_stream(fpath: Path, engine, existing: set) -> int:
-    """Lee un TXT/CSV desde disco (seekable) en modo streaming por chunks."""
+    """Lee un TXT/CSV grande desde disco en chunks, sin iterrows()."""
     try:
-        sample = fpath.read_bytes()[:4096]
-        enc = _detect_enc(sample)
-        sep = _detect_sep_bytes(sample, enc)
+        sample  = fpath.read_bytes()[:4096]
+        enc     = _detect_enc(sample)
+        sep     = _detect_sep_bytes(sample, enc)
         inserted = 0
-        reader = pd.read_csv(
+        reader  = pd.read_csv(
             fpath, sep=sep, encoding=enc, dtype=str,
             chunksize=_CHUNKSIZE, on_bad_lines="skip", low_memory=False,
         )
         for chunk in reader:
+            # Normalizar nombres de columna
             chunk.columns = [_norm(c) for c in chunk.columns]
+            # Iterar sobre la matriz numpy (sin crear pd.Series por fila)
+            header  = list(chunk.columns)
             records = []
-            for _, row in chunk.iterrows():
-                rec = _parse_bruto_row(row)
+            for row_vals in chunk.values:
+                row_dict = dict(zip(header, row_vals))
+                rec = _parse_bruto_row(row_dict)
                 if rec is None:
                     continue
                 h = _hash_rec(rec)

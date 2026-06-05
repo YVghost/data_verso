@@ -1,0 +1,57 @@
+services:
+
+  # ── SQL Server 2022 (Developer Edition — gratis para desarrollo) ─────────────
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: data_verso_sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      # Variables para el script de inicialización
+      DV_DATABASE:       ${DV_DATABASE:-data_verso}
+      DV_ADMIN_USER:     ${DV_ADMIN_USER:-dv_admin}
+      DV_ADMIN_PASSWORD: ${DV_ADMIN_PASSWORD}
+      DV_READ_USER:      ${DV_READ_USER:-dv_reader}
+      DV_READ_PASSWORD:  ${DV_READ_PASSWORD}
+    ports:
+      - "1434:1433"   # 1434 en el host → 1433 en el contenedor (evita conflicto con SQL Server local)
+    volumes:
+      - sqlserver_data:/var/opt/mssql          # datos persistentes
+      - ./docker:/docker-entrypoint-initdb.d:ro # init.sh + init.sql (read-only)
+    entrypoint: ["/bin/bash", "/docker-entrypoint-initdb.d/init.sh"]
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - >
+          /opt/mssql-tools18/bin/sqlcmd
+          -S localhost -U sa -P "$$MSSQL_SA_PASSWORD"
+          -Q "SELECT 1" -b -C > /dev/null 2>&1 || exit 1
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ── dbgate — panel web de administración (estilo SSMS) ───────────────────────
+  dbgate:
+    image: dbgate/dbgate:latest
+    container_name: data_verso_dbgate
+    ports:
+      - "3000:3000"
+    environment:
+      # Conexión preconfigurada con usuario de solo lectura
+      CONNECTIONS:       con1
+      LABEL_con1:        "data_verso"
+      SERVER_con1:       sqlserver
+      PORT_con1:         1433
+      USER_con1:         ${DV_READ_USER:-dv_reader}
+      PASSWORD_con1:     ${DV_READ_PASSWORD}
+      DATABASE_con1:     ${DV_DATABASE:-data_verso}
+      ENGINE_con1:       mssql@dbgate-plugin-mssql
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
+volumes:
+  sqlserver_data:
+    name: data_verso_sqlserver_data

@@ -50,6 +50,11 @@ Desktop.ini
 # ── Exportaciones locales ────────────────────────────────────────────────────
 exported_data/
 
+# ── Docker ───────────────────────────────────────────────────────────────────
+# Los volúmenes de Docker son gestionados por el daemon, no por git.
+# Si algún bind-mount local escribe datos aquí, ignorarlos:
+docker/data/
+
 # ── Excel temporales ─────────────────────────────────────────────────────────
 ~$*.xls*
 

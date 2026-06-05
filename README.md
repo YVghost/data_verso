@@ -9,9 +9,9 @@ Pipeline de ETL para indicadores económicos y financieros de Ecuador. Descarga 
 | Herramienta | Versión mínima |
 |---|---|
 | Python | 3.11+ |
-| SQL Server | 2019+ (local, autenticación Windows) |
 | ODBC Driver | 17 for SQL Server |
 | Playwright | instalado con `playwright install chromium` |
+| **SQL Server** | local 2019+ (Windows Auth) **o** Docker Desktop |
 
 ---
 
@@ -36,13 +36,48 @@ playwright install chromium
 
 ### Base de datos
 
-Crear la base de datos en SQL Server antes de ejecutar cualquier fuente:
+Hay dos opciones para la base de datos. Se selecciona con una variable en `.env`:
+
+```
+DV_USE_DOCKER=true   → Docker  (SQL Server en contenedor, puerto 1434)
+DV_USE_DOCKER=false  → Local   (SQL Server instalado, Windows Authentication)
+```
+
+#### Opción A — Docker (recomendado para entornos nuevos)
+
+Requiere [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado y corriendo.
+
+```bash
+# 1. Crear el archivo de configuración
+cp .env.example .env
+# Editar .env con tus contraseñas si lo deseas (o usar las que vienen por defecto)
+
+# 2. Levantar SQL Server + panel web
+docker compose up -d
+
+# SQL Server disponible en localhost:1434
+# Panel de administración (dbgate) en http://localhost:3000
+```
+
+La base de datos, usuarios y permisos se crean automáticamente al primer arranque.
+
+```bash
+# Comandos útiles de Docker
+docker compose ps          # ver estado
+docker compose logs -f     # ver logs en tiempo real
+docker compose stop        # pausar (conserva datos)
+docker compose down        # apagar y eliminar contenedores (datos conservados en volumen)
+docker compose down -v     # apagar y borrar todos los datos
+```
+
+#### Opción B — SQL Server local (Windows)
 
 ```sql
+-- Crear la base de datos manualmente
 CREATE DATABASE data_verso;
 ```
 
-La conexión usa autenticación Windows (Trusted_Connection). Si necesitas usuario y contraseña, edita `utils/base_engine.py`.
+En `.env`, poner `DV_USE_DOCKER=false` (o dejar solo `DV_SERVER` y `DV_DATABASE` sin credenciales de usuario). La conexión usa autenticación Windows automáticamente.
 
 ---
 
@@ -50,8 +85,14 @@ La conexión usa autenticación Windows (Trusted_Connection). Si necesitas usuar
 
 ```
 data_verso/
+├── docker/
+│   └── init.sh                 # Entrypoint Docker: crea DB, usuarios y permisos al primer arranque
+├── docker-compose.yml          # SQL Server 2022 + dbgate (panel web)
+├── .env                        # Credenciales locales (ignorado por git)
+├── .env.example                # Plantilla de configuración
+│
 ├── utils/
-│   ├── base_engine.py          # Conexión SQLAlchemy a SQL Server
+│   ├── base_engine.py          # Conexión SQLAlchemy — Docker o local según DV_USE_DOCKER
 │   ├── normalizer.py           # Funciones de limpieza de texto y números
 │   ├── ciiu.py                 # Mapeo CIIU v4.0 Ecuador (código → descripción + nivel)
 │   └── export_excel.py         # Exportación interactiva de tablas a .xlsx
@@ -607,7 +648,12 @@ python main.py --etl-only
 ## Utilitarios (`utils/`)
 
 ### `base_engine.py`
-Crea y devuelve el engine de SQLAlchemy conectado a SQL Server con autenticación Windows.
+Crea y devuelve el engine de SQLAlchemy conectado a SQL Server. Lee automáticamente el archivo `.env` de la raíz del proyecto.
+
+- `DV_USE_DOCKER=true` → SQL Auth contra `localhost:1434` (contenedor Docker)
+- `DV_USE_DOCKER=false` → Windows Authentication contra el SQL Server local
+
+Expone dos engines: `get_master_engine()` con permisos DDL+DML (loaders ETL) y `get_read_engine()` con solo lectura (exportaciones, dbgate).
 
 ### `normalizer.py`
 Funciones de limpieza y normalización de texto y valores numéricos usadas por múltiples loaders.
@@ -667,3 +713,10 @@ inflate64       descompresión Deflate64 (requerido para mutualistas col_bruto)
 - **Skip inteligente:** el bot verifica si el archivo ya está en disco (o el ETag remoto coincide) antes de descargar; el loader verifica hashes antes de insertar.
 - **Tolerancia a cambios de formato:** los parsers localizan datos por etiqueta de texto o keyword en cabeceras, no por número de fila fijo, para tolerar reestructuraciones anuales.
 - **Encoding:** los archivos del BCE/SRI/INEC se decodifican forzando UTF-8 o cp1252 según la fuente para manejar correctamente caracteres como `ñ`, `á`, `é`, etc.
+
+docker compose up -d 
+
+docker compose stop        # pausar sin borrar datos
+docker compose start       # reanudar
+docker compose down        # apagar y eliminar contenedores (los datos se conservan en el volumen)
+docker compose down -v     # apagar Y borrar todos los datos (reinicio total)

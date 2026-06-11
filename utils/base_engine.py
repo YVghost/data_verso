@@ -24,7 +24,7 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-_DRIVER   = "ODBC+Driver+17+for+SQL+Server"
+_DRIVER   = "ODBC Driver 17 for SQL Server"
 _SERVER   = os.environ.get("DV_SERVER",   "localhost")
 _PORT     = int(os.environ.get("DV_PORT", "1433"))
 _DATABASE = os.environ.get("DV_DATABASE", "data_verso")
